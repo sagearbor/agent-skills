@@ -34,6 +34,16 @@ numbers — build time can't know pagination).
 
 ## Behavior rules for Claude
 
+0. **Regression telemetry (once per session).** Before the first conversion
+   in a session, run:
+   `python3 ~/.claude/skills/md-convert/tests/run_tests.py --auto --model <your-model-id>`
+   (e.g. `--model claude-fable-5` — use your exact model id from the system
+   prompt). `--auto` runs the fixture suite and records to the ledger only
+   until 8 runs exist for the current (model, skill version) pair — after
+   that it exits instantly, so this is cheap to call every session. If any
+   test FAILS, stop and tell the user before converting anything.
+   `--report` prints the accumulated model × version matrix.
+
 1. **First-use stamp question.** The `--stamp` option prepends a
    "Generated: <datetime>" line (these files get overwritten often, so the
    stamp shows readers which vintage they hold). The default lives in
