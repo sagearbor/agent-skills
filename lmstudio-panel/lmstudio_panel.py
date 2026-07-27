@@ -285,6 +285,183 @@ def print_report(by="project-model", windows=False, days=None):
               + ("  <- bursty" if burst >= 3 else "  <- steady"))
 
 
+# ------------------------------------------------------------- html report
+# Colors: validated categorical palette (dataviz reference instance);
+# slots 3-4 sit <3:1 on the surface, so every bar carries a value label.
+_C = {"local": "#2a78d6", "cloud": "#008300", "ink": "#1c2733",
+      "muted": "#5b6b7b", "grid": "#e3e8ee", "surface": "#fcfcfb"}
+
+
+def _all_usage_events():
+    """Normalized events from BOTH ledgers: the skill's lmstudio-*.jsonl and
+    the repo-agnostic ~/.llm_token_ledger/ledger.jsonl (LLMClient hook)."""
+    out = []
+    for e in read_ledgers():  # skill ledger
+        out.append({"ts": e.get("ts", ""), "local": True,
+                    "model": e.get("model", "?"), "project": e.get("project", "?"),
+                    "tin": e.get("prompt_tokens") or 0,
+                    "tout": e.get("completion_tokens") or 0})
+    repo_ledger = ledger_dir() / "ledger.jsonl"
+    if repo_ledger.exists():
+        for line in repo_ledger.read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            out.append({"ts": e.get("ts", ""), "local": e.get("provider") == "local",
+                        "model": e.get("model", "?"), "project": e.get("project", "?"),
+                        "tin": e.get("tokens_in") or 0, "tout": e.get("tokens_out") or 0})
+    return [e for e in out if e["ts"]]
+
+
+def _fmt_m(n):
+    return f"{n/1e9:.2f}B" if n >= 1e9 else (f"{n/1e6:.1f}M" if n >= 1e6
+                                             else f"{n/1e3:.0f}k" if n >= 1e3 else str(n))
+
+
+def _bars_svg(rows, color_fn, w=680, bh=22, gap=2):
+    """Horizontal bar chart with direct value labels (relief rule)."""
+    if not rows:
+        return "<p>no data</p>"
+    mx = max(v for _, v in rows) or 1
+    h = len(rows) * (bh + gap) + 4
+    parts = [f'<svg viewBox="0 0 {w} {h}" role="img" font-family="sans-serif">']
+    for i, (label, v) in enumerate(rows):
+        y = i * (bh + gap)
+        bw = max(3, (w - 260) * v / mx)
+        parts.append(
+            f'<text x="200" y="{y+bh-6}" text-anchor="end" font-size="12" '
+            f'fill="{_C["ink"]}">{label[:30]}</text>'
+            f'<rect x="208" y="{y}" width="{bw:.0f}" height="{bh-4}" rx="2" '
+            f'fill="{color_fn(label)}"><title>{label}: {v:,} tokens</title></rect>'
+            f'<text x="{212+bw:.0f}" y="{y+bh-6}" font-size="12" '
+            f'fill="{_C["muted"]}">{_fmt_m(v)}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _timeline_svg(buckets_local, buckets_cloud, keys, w=680, h=180):
+    """Two thin lines (local vs cloud tokens per bucket) + hover dots."""
+    if not keys:
+        return "<p>no data</p>"
+    mx = max([buckets_local.get(k, 0) + 0 for k in keys]
+             + [buckets_cloud.get(k, 0) for k in keys]) or 1
+    pad, iw, ih = 34, w - 44, h - 40
+
+    def xy(i, v):
+        x = pad + iw * (i / max(len(keys) - 1, 1))
+        y = 8 + ih * (1 - v / mx)
+        return x, y
+
+    parts = [f'<svg viewBox="0 0 {w} {h}" role="img" font-family="sans-serif">']
+    for frac in (0, 0.5, 1):
+        y = 8 + ih * (1 - frac)
+        parts.append(f'<line x1="{pad}" y1="{y}" x2="{w-8}" y2="{y}" '
+                     f'stroke="{_C["grid"]}" stroke-width="1"/>'
+                     f'<text x="{pad-4}" y="{y+4}" text-anchor="end" font-size="10" '
+                     f'fill="{_C["muted"]}">{_fmt_m(int(mx*frac))}</text>')
+    for series, color, name in ((buckets_local, _C["local"], "local"),
+                                (buckets_cloud, _C["cloud"], "cloud")):
+        pts = [xy(i, series.get(k, 0)) for i, k in enumerate(keys)]
+        path = " ".join(f"{x:.0f},{y:.0f}" for x, y in pts)
+        parts.append(f'<polyline points="{path}" fill="none" stroke="{color}" '
+                     f'stroke-width="2"/>')
+        for i, (x, y) in enumerate(pts):
+            v = series.get(keys[i], 0)
+            if v:
+                parts.append(f'<circle cx="{x:.0f}" cy="{y:.0f}" r="4" fill="{color}">'
+                             f'<title>{keys[i]} {name}: {v:,} tokens</title></circle>')
+        ex, ey = pts[-1]
+        parts.append(f'<text x="{ex+4:.0f}" y="{ey+4:.0f}" font-size="11" '
+                     f'fill="{_C["ink"]}">{name}</text>')
+    parts.append(f'<text x="{pad}" y="{h-6}" font-size="10" fill="{_C["muted"]}">'
+                 f'{keys[0]}</text><text x="{w-8}" y="{h-6}" text-anchor="end" '
+                 f'font-size="10" fill="{_C["muted"]}">{keys[-1]}</text></svg>')
+    return "".join(parts)
+
+
+def html_report(path, days=None):
+    events = _all_usage_events()
+    if days:
+        cutoff = (datetime.datetime.now().astimezone()
+                  - datetime.timedelta(days=days)).isoformat()
+        events = [e for e in events if e["ts"] >= cutoff]
+    if not events:
+        raise SystemExit("no usage events found in either ledger")
+    loc = [e for e in events if e["local"]]
+    lin = sum(e["tin"] for e in loc)
+    lout = sum(e["tout"] for e in loc)
+    saved = lin / 1e6 * 2.50 + lout / 1e6 * 10.00  # Azure ref rates 2026-07
+
+    span_days = (max(e["ts"] for e in events)[:10] !=
+                 min(e["ts"] for e in events)[:10])
+    blen = 10 if span_days else 13  # daily vs hourly buckets
+    bl, bc = defaultdict(int), defaultdict(int)
+    for e in events:
+        (bl if e["local"] else bc)[e["ts"][:blen]] += e["tin"] + e["tout"]
+    keys = sorted(set(bl) | set(bc))[-60:]
+
+    by_model = defaultdict(lambda: [0, False])
+    for e in events:
+        by_model[e["model"]][0] += e["tin"] + e["tout"]
+        by_model[e["model"]][1] = e["local"]
+    top = sorted(by_model.items(), key=lambda kv: -kv[1][0])[:10]
+    model_rows = [(m, v[0]) for m, v in top]
+    model_local = {m: v[1] for m, v in top}
+
+    by_proj = defaultdict(int)
+    for e in loc:
+        by_proj[e["project"]] += e["tin"] + e["tout"]
+    proj_rows = sorted(by_proj.items(), key=lambda kv: -kv[1])[:8]
+
+    tiles = "".join(
+        f'<div class="tile"><b>{v}</b><span>{k}</span></div>' for k, v in [
+            ("local calls", f"{len(loc):,}"),
+            ("local tokens in / out", f"{_fmt_m(lin)} / {_fmt_m(lout)}"),
+            ("est. saved vs Azure*", f"${saved:,.2f}"),
+            ("projects using local", f"{len(by_proj)}"),
+            ("all-provider events", f"{len(events):,}"),
+        ])
+    legend = (f'<span class="chip" style="background:{_C["local"]}"></span> local '
+              f'&nbsp; <span class="chip" style="background:{_C["cloud"]}"></span> cloud')
+    table = "".join(f"<tr><td>{m}</td><td>{'local' if l else 'cloud'}</td>"
+                    f"<td>{v:,}</td></tr>" for m, (v, l) in top)
+    html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM usage ledger report</title><style>
+body{{font-family:-apple-system,Segoe UI,sans-serif;background:{_C["surface"]};
+ color:{_C["ink"]};max-width:760px;margin:0 auto;padding:20px;line-height:1.4}}
+h1{{font-size:1.15rem}} h2{{font-size:.95rem;margin:20px 0 6px}}
+.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}}
+.tile{{background:#fff;border:1px solid {_C["grid"]};border-radius:8px;
+ padding:10px;text-align:center}} .tile b{{display:block;font-size:1.05rem}}
+.tile span{{font-size:.7rem;color:{_C["muted"]}}}
+.chip{{display:inline-block;width:10px;height:10px;border-radius:2px}}
+.note{{font-size:.72rem;color:{_C["muted"]}}}
+table{{border-collapse:collapse;font-size:.8rem}} td{{border:1px solid {_C["grid"]};
+ padding:3px 8px}} summary{{cursor:pointer;font-size:.85rem;margin-top:14px}}
+</style></head><body>
+<h1>LLM usage ledger report</h1>
+<div class="note">generated {datetime.datetime.now().astimezone().isoformat(timespec="minutes")}
+ · sources: ~/.llm_token_ledger/ledger.jsonl + lmstudio-*.jsonl
+ · {"last %g days" % days if days else "all time"}</div>
+<div class="tiles">{tiles}</div>
+<h2>Tokens over time ({"daily" if blen == 10 else "hourly"}) &nbsp; {legend}</h2>
+{_timeline_svg(bl, bc, keys)}
+<h2>Top models by tokens</h2>
+{_bars_svg(model_rows, lambda m: _C["local"] if model_local.get(m) else _C["cloud"])}
+<h2>Local tokens by project</h2>
+{_bars_svg(proj_rows, lambda _: _C["local"])}
+<details><summary>Data table (top models)</summary>
+<table><tr><td><b>model</b></td><td><b>provider</b></td><td><b>tokens</b></td></tr>
+{table}</table></details>
+<p class="note">*savings = local tokens priced at Azure reference rates
+ (2026-07: $2.50/M in, $10.00/M out) — the marginal cost actually paid was $0.</p>
+</body></html>"""
+    Path(path).write_text(html)
+    print(f"wrote {path} ({len(events):,} events, {len(loc):,} local)")
+
+
 # -------------------------------------------------------------------- cli
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
@@ -305,6 +482,9 @@ def main(argv=None):
                    choices=["project", "model", "user", "project-model"])
     p.add_argument("--windows", action="store_true")
     p.add_argument("--days", type=float)
+    p.add_argument("--html", nargs="?", const="llm_usage_report.html",
+                   metavar="PATH", help="write a self-contained graphical "
+                   "HTML report (charts over BOTH ledgers) to PATH")
     a = ap.parse_args(argv)
 
     if a.cmd == "serve":
@@ -327,7 +507,10 @@ def main(argv=None):
     if a.cmd == "smoke":
         return 0 if smoke(a.model) else 1
     if a.cmd == "report":
-        print_report(by=a.by, windows=a.windows, days=a.days)
+        if a.html:
+            html_report(a.html, days=a.days)
+        else:
+            print_report(by=a.by, windows=a.windows, days=a.days)
         return 0
     return 1
 
