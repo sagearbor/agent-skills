@@ -106,6 +106,46 @@ def run_suite():
               and lp.is_local_event(norm[0]),
               f"merged={len(merged)} norm={norm!r}")
 
+        # 8b. model-name normalization for price matching
+        check("normalize_names",
+              lp.normalize_model_name("lmstudio-community/Qwen3-32B-MLX-4bit")
+              == "qwen3-32b"
+              and lp.normalize_model_name("google/gemma-4-e4b:2")
+              == "gemma-4-e4b")
+
+        # 8c. cheapest-hosted match + as-of price join (no network)
+        table = {"together/qwen3-32b": {"mode": "chat",
+                                        "input_cost_per_token": 4e-7,
+                                        "output_cost_per_token": 1.2e-6},
+                 "groq/qwen3-32b": {"mode": "chat",
+                                    "input_cost_per_token": 2.9e-7,
+                                    "output_cost_per_token": 5.9e-7}}
+        hit = lp.match_price("Qwen3-32B-MLX-4bit", table)
+        check("cheapest_hosted_match", hit is not None
+              and abs(hit[0] - 0.29) < 1e-6 and "groq" in hit[2],
+              f"got {hit!r}")
+        table["azure/qwen3-32b-fp8"] = {"mode": "chat",
+                                        "input_cost_per_token": 1e-7,
+                                        "output_cost_per_token": 2e-7}
+        table["x/gpt-5-nano"] = {"mode": "chat",
+                                 "input_cost_per_token": 5e-8,
+                                 "output_cost_per_token": 4e-7}
+        check("no_variant_overmatch",
+              lp.match_price("gpt-5", table) is None  # nano is NOT gpt-5
+              and abs(lp.match_price("qwen3-32b", table)[0] - 0.1) < 1e-6,
+              "prefix over-match not blocked or fp8 suffix not accepted")
+        (Path(td) / "prices.jsonl").write_text(
+            '{"ts":"2026-07-01","model":"qwen3-32b","input_per_m":0.40,"output_per_m":1.2,"source":"t"}\n'
+            '{"ts":"2026-07-20","model":"qwen3-32b","input_per_m":0.29,"output_per_m":0.59,"source":"t"}\n'
+            '{"ts":"2026-07-01","model":"reference","input_per_m":2.5,"output_per_m":10.0,"source":"t"}\n')
+        s = lp.load_price_series()
+        early = lp.as_of_price("qwen3-32b", "2026-07-10T12:00:00", s)
+        late = lp.as_of_price("qwen3-32b", "2026-07-26T12:00:00", s)
+        fall = lp.as_of_price("unknown-model", "2026-07-26T12:00:00", s)
+        check("as_of_join", early[0] == 0.40 and late[0] == 0.29
+              and fall[2] == "reference",
+              f"early={early} late={late} fall={fall}")
+
         # 9. html report renders from the merged dir
         out = Path(td) / "report.html"
         lp.html_report(out)

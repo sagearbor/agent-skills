@@ -327,6 +327,129 @@ def print_report(by="project-model", windows=False, days=None):
               + ("  <- bursty" if burst >= 3 else "  <- steady"))
 
 
+# ------------------------------------------------------------------ prices
+# Append-only, dated per-model price series (Sage's paradigm, 2026-07-27):
+# `prices update` fetches the LiteLLM community price table (the same data
+# ccusage uses) and APPENDS today's entries — old entries are never edited,
+# and reports join as-of (latest entry dated <= the usage event). Open-weight
+# models are priced at their cheapest listed HOSTED rate: the honest
+# counterfactual "you could have rented this exact model for $X". Models
+# with no hosted listing fall back to the dated reference benchmark.
+LITELLM_PRICES_URL = ("https://raw.githubusercontent.com/BerriAI/litellm/"
+                      "main/model_prices_and_context_window.json")
+
+
+def prices_file() -> Path:
+    return ledger_dir() / "prices.jsonl"
+
+
+def normalize_model_name(name: str) -> str:
+    """'lmstudio-community/Qwen3-32B-MLX-4bit' -> 'qwen3-32b' etc."""
+    n = name.lower().split(":")[0]
+    if "/" in n:
+        n = n.split("/")[-1]
+    for suf in ("-mlx-4bit", "-mlx-8bit", "-gguf", "-mxfp4", "-4bit",
+                "-8bit", "-mlx"):
+        n = n.removesuffix(suf)
+    return n
+
+
+_PRECISION_SUFFIXES = ("-fp8", "-fp16", "-bf16", "-awq", "-int4", "-int8",
+                       "-quantized")
+
+
+def _same_model(target: str, key_norm: str) -> bool:
+    """True only for the SAME model: exact normalized match, or the key is
+    target + a precision/quant suffix. A bare prefix match is NOT enough —
+    'gpt-5' must not match 'gpt-5-nano' (a different, cheaper model)."""
+    if key_norm == target:
+        return True
+    if key_norm.startswith(target):
+        rest = key_norm[len(target):]
+        return rest in _PRECISION_SUFFIXES
+    return False
+
+
+def match_price(model: str, table: dict):
+    """Cheapest hosted chat-mode rate for exactly `model` in a LiteLLM-shaped
+    table. Returns (input_per_m, output_per_m, matched_key) or None."""
+    target = normalize_model_name(model)
+    if not target:
+        return None
+    best = None
+    for key, info in table.items():
+        if not isinstance(info, dict) or info.get("mode") not in (None, "chat"):
+            continue
+        if not _same_model(target, normalize_model_name(key)):
+            continue
+        ci, co = info.get("input_cost_per_token"), info.get("output_cost_per_token")
+        if not ci or not co:
+            continue
+        cand = (ci * 1e6, co * 1e6, key)
+        if best is None or (cand[0] + cand[1]) < (best[0] + best[1]):
+            best = cand
+    return best
+
+
+def prices_update(models=None):
+    """Fetch current hosted rates and append dated entries (never edits)."""
+    if models is None:
+        models = sorted({e.get("model", "") for e in read_ledgers(scope="all")})
+    with urllib.request.urlopen(LITELLM_PRICES_URL, timeout=30) as r:
+        table = json.loads(r.read())
+    today = datetime.date.today().isoformat()
+    rates = CLOUD_REFERENCE_RATES[CURRENT_RATE_KEY]
+    entries = [{"ts": today, "model": "reference",
+                "input_per_m": rates["input_per_m"],
+                "output_per_m": rates["output_per_m"],
+                "source": f"builtin:{CURRENT_RATE_KEY}"}]
+    for m in models:
+        hit = match_price(m, table)
+        if hit:
+            entries.append({"ts": today, "model": normalize_model_name(m),
+                            "input_per_m": round(hit[0], 4),
+                            "output_per_m": round(hit[1], 4),
+                            "source": f"litellm:{hit[2]}"})
+    with _write_lock:
+        ledger_dir().mkdir(parents=True, exist_ok=True)
+        with open(prices_file(), "a") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+    for e in entries:
+        print(f"{e['ts']} {e['model']:32s} in=${e['input_per_m']:<8g} "
+              f"out=${e['output_per_m']:<8g} ({e['source']})")
+    print(f"appended {len(entries)} dated entries -> {prices_file()}")
+
+
+def load_price_series() -> dict:
+    """{normalized_model: [(ts, in_per_m, out_per_m), ...] sorted by ts}."""
+    series = defaultdict(list)
+    if prices_file().exists():
+        for line in prices_file().read_text().splitlines():
+            try:
+                e = json.loads(line)
+                series[e["model"]].append(
+                    (e["ts"], e["input_per_m"], e["output_per_m"]))
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+    for v in series.values():
+        v.sort()
+    return dict(series)
+
+
+def as_of_price(model: str, ts: str, series: dict):
+    """Latest price entry dated <= ts for model (else reference, else the
+    builtin table). Returns (in_per_m, out_per_m, source)."""
+    day = (ts or "")[:10]
+    for key, src in ((normalize_model_name(model), "model"),
+                     ("reference", "reference")):
+        rows = [r for r in series.get(key, []) if r[0] <= day] or None
+        if rows:
+            return rows[-1][1], rows[-1][2], src
+    rates = CLOUD_REFERENCE_RATES[CURRENT_RATE_KEY]
+    return rates["input_per_m"], rates["output_per_m"], "builtin"
+
+
 # ------------------------------------------------------------- html report
 # Colors: validated categorical palette (dataviz reference instance);
 # slots 3-4 sit <3:1 on the surface, so every bar carries a value label.
@@ -420,9 +543,19 @@ def html_report(path, days=None):
     loc = [e for e in events if e["local"]]
     lin = sum(e["tin"] for e in loc)
     lout = sum(e["tout"] for e in loc)
-    rates = CLOUD_REFERENCE_RATES[CURRENT_RATE_KEY]
-    saved = (lin / 1e6 * rates["input_per_m"]
-             + lout / 1e6 * rates["output_per_m"])
+    series = load_price_series()
+    saved = 0.0
+    priced_models = set()
+    for e in loc:
+        pin, pout, src = as_of_price(e["model"], e["ts"], series)
+        saved += e["tin"] / 1e6 * pin + e["tout"] / 1e6 * pout
+        if src == "model":
+            priced_models.add(normalize_model_name(e["model"]))
+    price_note = (f"per-model hosted rates for {len(priced_models)} model(s), "
+                  f"reference benchmark for the rest"
+                  if priced_models else
+                  "reference benchmark only — run `prices update` for "
+                  "per-model hosted rates")
 
     span_days = (max(e["ts"] for e in events)[:10] !=
                  min(e["ts"] for e in events)[:10])
@@ -486,9 +619,9 @@ table{{border-collapse:collapse;font-size:.8rem}} td{{border:1px solid {_C["grid
 <details><summary>Data table (top models)</summary>
 <table><tr><td><b>model</b></td><td><b>provider</b></td><td><b>tokens</b></td></tr>
 {table}</table></details>
-<p class="note">*savings = local tokens priced at cloud reference rates
- ({CURRENT_RATE_KEY}: ${rates["input_per_m"]}/M in, ${rates["output_per_m"]}/M out)
- — the marginal cost actually paid was $0.</p>
+<p class="note">*savings = local tokens priced at what the same usage would
+ have cost hosted, joined as-of each event's date against the append-only
+ price series ({price_note}). The marginal cost actually paid was $0.</p>
 </body></html>"""
     Path(path).write_text(html)
     print(f"wrote {path} ({len(events):,} events, {len(loc):,} local)")
@@ -517,6 +650,10 @@ def main(argv=None):
     p.add_argument("--html", nargs="?", const="llm_usage_report.html",
                    metavar="PATH", help="write a self-contained graphical "
                    "HTML report (charts over BOTH ledgers) to PATH")
+    p = sub.add_parser("prices", help="append-only dated price series")
+    p.add_argument("action", choices=["update", "list"],
+                   help="update: fetch hosted rates for ledger models and "
+                        "append dated entries; list: show the series")
     a = ap.parse_args(argv)
 
     if a.cmd == "serve":
@@ -543,6 +680,14 @@ def main(argv=None):
             html_report(a.html, days=a.days)
         else:
             print_report(by=a.by, windows=a.windows, days=a.days)
+        return 0
+    if a.cmd == "prices":
+        if a.action == "update":
+            prices_update()
+        else:
+            for model, rows in sorted(load_price_series().items()):
+                for ts, pin, pout in rows:
+                    print(f"{ts} {model:32s} in=${pin:<8g} out=${pout:g}")
         return 0
     return 1
 

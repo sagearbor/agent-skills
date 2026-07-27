@@ -22,6 +22,8 @@ or CLI by any repo, any AI tool, or a human:
 | `chat --model M --prompt P [--task-tag T]` | one completion call, ALWAYS ledger-logged |
 | `smoke --model M` | judge-shaped health check (expects VIOLATION) |
 | `report [--by project\|model\|user\|project-model] [--windows] [--days N]` | cross-repo usage rollup + burst analysis |
+| `report --html [PATH]` | self-contained graphical dashboard (works from any dir/repo) |
+| `prices update` / `prices list` | append dated hosted rates (LiteLLM table) for models seen in the ledger; reports join **as-of** each event's date — entries are never edited, so old reports stay reproducible |
 
 ## Rules
 
