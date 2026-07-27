@@ -146,13 +146,25 @@ def run_suite():
               and fall[2] == "reference",
               f"early={early} late={late} fall={fall}")
 
-        # 9. html report renders from the merged dir
+        # 9. html report renders from the merged dir (interactive version:
+        # data island + filter controls + static fallback table)
         out = Path(td) / "report.html"
         lp.html_report(out)
         html = out.read_text()
-        check("html_report_renders", "<svg" in html and "another-repo" in html
-              and "est. saved" in html.lower() or "saved" in html,
-              "missing svg/project/savings")
+        check("html_report_renders",
+              'type="application/json"' in html
+              and "another-repo" in html          # data island has the project
+              and 'data-s="local"' in html        # scope chips
+              and 'id="mlist"' in html            # model filter
+              and "<table>" in html,              # JS-independent fallback
+              "missing data island / filters / table")
+
+        # 9b. hostile model name cannot break out of the static table
+        lp.log_usage("<script>alert(1)</script>", {"prompt_tokens": 1,
+                                                   "completion_tokens": 1}, 0.1)
+        lp.html_report(out)
+        check("html_escapes_model_names",
+              "<script>alert(1)</script>" not in out.read_text())
 
     os.environ.pop("LLM_TOKEN_LEDGER_DIR", None)
 

@@ -471,65 +471,264 @@ def _fmt_m(n):
                                              else f"{n/1e3:.0f}k" if n >= 1e3 else str(n))
 
 
-def _bars_svg(rows, color_fn, w=680, bh=22, gap=2):
-    """Horizontal bar chart with direct value labels (relief rule)."""
-    if not rows:
-        return "<p>no data</p>"
-    mx = max(v for _, v in rows) or 1
-    h = len(rows) * (bh + gap) + 4
-    parts = [f'<svg viewBox="0 0 {w} {h}" role="img" font-family="sans-serif">']
-    for i, (label, v) in enumerate(rows):
-        y = i * (bh + gap)
-        bw = max(3, (w - 260) * v / mx)
-        parts.append(
-            f'<text x="200" y="{y+bh-6}" text-anchor="end" font-size="12" '
-            f'fill="{_C["ink"]}">{label[:30]}</text>'
-            f'<rect x="208" y="{y}" width="{bw:.0f}" height="{bh-4}" rx="2" '
-            f'fill="{color_fn(label)}"><title>{label}: {v:,} tokens</title></rect>'
-            f'<text x="{212+bw:.0f}" y="{y+bh-6}" font-size="12" '
-            f'fill="{_C["muted"]}">{_fmt_m(v)}</text>')
-    parts.append("</svg>")
-    return "".join(parts)
+def _agg_rows(events, series):
+    """Pre-aggregate events for the interactive report: one row per
+    (time bucket, model, project, locality) with token sums, call count,
+    and as-of-priced cost. Small enough to embed; rich enough to filter."""
+    span_days = (max(e["ts"] for e in events)[:10]
+                 != min(e["ts"] for e in events)[:10])
+    blen = 10 if span_days else 13  # daily vs hourly buckets
+    agg = {}
+    for e in events:
+        key = (e["ts"][:blen], e["model"], e["project"], bool(e["local"]))
+        r = agg.setdefault(key, {"i": 0, "o": 0, "c": 0, "s": 0.0})
+        r["i"] += e["tin"]
+        r["o"] += e["tout"]
+        r["c"] += 1
+        pin, pout, _src = as_of_price(e["model"], e["ts"], series)
+        r["s"] += e["tin"] / 1e6 * pin + e["tout"] / 1e6 * pout
+    rows = [{"b": b, "m": m, "p": p, "l": l, "i": r["i"], "o": r["o"],
+             "c": r["c"], "s": round(r["s"], 4)}
+            for (b, m, p, l), r in agg.items()]
+    rows.sort(key=lambda r: r["b"])
+    return rows, ("daily" if blen == 10 else "hourly")
 
 
-def _timeline_svg(buckets_local, buckets_cloud, keys, w=680, h=180):
-    """Two thin lines (local vs cloud tokens per bucket) + hover dots."""
-    if not keys:
-        return "<p>no data</p>"
-    mx = max([buckets_local.get(k, 0) + 0 for k in keys]
-             + [buckets_cloud.get(k, 0) for k in keys]) or 1
-    pad, iw, ih = 34, w - 44, h - 40
+# Plain string template (NOT an f-string: CSS/JS braces stay literal).
+# Placeholders: @@GENERATED@@ @@SPAN@@ @@DATA@@ @@TABLE@@ @@PRICENOTE@@
+_HTML_TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM usage ledger report</title><style>
+body{font-family:-apple-system,Segoe UI,sans-serif;background:#fcfcfb;
+ color:#1c2733;max-width:780px;margin:0 auto;padding:20px;line-height:1.4}
+h1{font-size:1.15rem} h2{font-size:.95rem;margin:18px 0 6px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}
+.tile{background:#fff;border:1px solid #e3e8ee;border-radius:8px;
+ padding:10px;text-align:center}.tile b{display:block;font-size:1.05rem}
+.tile span{font-size:.7rem;color:#5b6b7b}
+.chip{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px}
+.note{font-size:.72rem;color:#5b6b7b}
+.filters{background:#fff;border:1px solid #e3e8ee;border-radius:8px;
+ padding:8px 12px;margin:10px 0;font-size:.82rem}
+.scope button{border:1px solid #e3e8ee;background:#fff;border-radius:14px;
+ padding:3px 12px;margin-right:6px;cursor:pointer;font-size:.8rem}
+.scope button.on{background:#1c2733;color:#fff;border-color:#1c2733}
+#mlist{display:flex;flex-wrap:wrap;gap:2px 14px;margin-top:6px;max-height:130px;
+ overflow-y:auto}
+#mlist label{white-space:nowrap;cursor:pointer}
+#mlist input{vertical-align:-2px}
+.mini{border:none;background:none;color:#2a78d6;cursor:pointer;font-size:.78rem;
+ text-decoration:underline;padding:0 4px}
+table{border-collapse:collapse;font-size:.8rem}
+td{border:1px solid #e3e8ee;padding:3px 8px}
+summary{cursor:pointer;font-size:.85rem;margin-top:14px}
+.empty{color:#5b6b7b;font-size:.85rem;padding:18px 0}
+</style></head><body>
+<h1>LLM usage ledger report</h1>
+<div class="note">generated @@GENERATED@@ · ledger dir: ~/.llm_token_ledger
+ (all *.jsonl writers merged) · @@SPAN@@</div>
+<div class="filters">
+ <span class="scope">
+  <button data-s="all" class="on">All</button><button data-s="local">Local only</button><button data-s="cloud">Cloud only</button>
+ </span>
+ <span class="note" id="scopeNote"></span>
+ <div><b style="font-size:.78rem">Models</b>
+  <button class="mini" id="mAll">all</button><button class="mini" id="mNone">none</button>
+  <div id="mlist"></div></div>
+</div>
+<div class="tiles" id="tiles"></div>
+<h2>Tokens over time (<span id="gran"></span>)
+ <span id="legend"></span></h2>
+<div id="timeline"></div>
+<h2>Models by tokens <span class="note">(within current filters)</span></h2>
+<div id="modelbars"></div>
+<h2>Tokens by project <span class="note">(within current filters)</span></h2>
+<div id="projbars"></div>
+<noscript><p class="note">Charts need JavaScript — the data table below is
+ complete and static.</p></noscript>
+<details><summary>Data table (all models, unfiltered)</summary>
+<table><tr><td><b>model</b></td><td><b>where</b></td><td><b>calls</b></td>
+<td><b>tokens in</b></td><td><b>tokens out</b></td></tr>@@TABLE@@</table></details>
+<p class="note">*money = tokens priced as-of each event's date against the
+ append-only price series (@@PRICENOTE@@). For local rows that is COST AVOIDED
+ (marginal cost paid: $0); for cloud rows it is estimated spend at surrogate
+ public rates, not an Azure invoice.</p>
+<script id="d" type="application/json">@@DATA@@</script>
+<script>
+(function(){
+"use strict";
+var D; try{ D = JSON.parse(document.getElementById("d").textContent); }
+catch(e){ document.getElementById("timeline").textContent =
+  "report data failed to load: " + e; return; }
+var C = {local:"#2a78d6", cloud:"#008300", ink:"#1c2733",
+         muted:"#5b6b7b", grid:"#e3e8ee"};
+var scope = "all", sel = null;   // sel === null -> all models
+var NS = "http://www.w3.org/2000/svg";
 
-    def xy(i, v):
-        x = pad + iw * (i / max(len(keys) - 1, 1))
-        y = 8 + ih * (1 - v / mx)
-        return x, y
+function fmt(n){ n = Math.round(n);
+  return n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
+       : n >= 1e3 ? (n/1e3).toFixed(0)+"k" : String(n); }
+function el(tag, attrs, parent, text){
+  var e = document.createElementNS(NS, tag);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  parent.appendChild(e); return e; }
+function div(id){ var d = document.getElementById(id);
+  while (d.firstChild) d.removeChild(d.firstChild); return d; }
+function rows(){
+  return D.rows.filter(function(r){
+    if (scope === "local" && !r.l) return false;
+    if (scope === "cloud" && r.l) return false;
+    return !sel || sel.has(r.m); }); }
 
-    parts = [f'<svg viewBox="0 0 {w} {h}" role="img" font-family="sans-serif">']
-    for frac in (0, 0.5, 1):
-        y = 8 + ih * (1 - frac)
-        parts.append(f'<line x1="{pad}" y1="{y}" x2="{w-8}" y2="{y}" '
-                     f'stroke="{_C["grid"]}" stroke-width="1"/>'
-                     f'<text x="{pad-4}" y="{y+4}" text-anchor="end" font-size="10" '
-                     f'fill="{_C["muted"]}">{_fmt_m(int(mx*frac))}</text>')
-    for series, color, name in ((buckets_local, _C["local"], "local"),
-                                (buckets_cloud, _C["cloud"], "cloud")):
-        pts = [xy(i, series.get(k, 0)) for i, k in enumerate(keys)]
-        path = " ".join(f"{x:.0f},{y:.0f}" for x, y in pts)
-        parts.append(f'<polyline points="{path}" fill="none" stroke="{color}" '
-                     f'stroke-width="2"/>')
-        for i, (x, y) in enumerate(pts):
-            v = series.get(keys[i], 0)
-            if v:
-                parts.append(f'<circle cx="{x:.0f}" cy="{y:.0f}" r="4" fill="{color}">'
-                             f'<title>{keys[i]} {name}: {v:,} tokens</title></circle>')
-        ex, ey = pts[-1]
-        parts.append(f'<text x="{ex+4:.0f}" y="{ey+4:.0f}" font-size="11" '
-                     f'fill="{_C["ink"]}">{name}</text>')
-    parts.append(f'<text x="{pad}" y="{h-6}" font-size="10" fill="{_C["muted"]}">'
-                 f'{keys[0]}</text><text x="{w-8}" y="{h-6}" text-anchor="end" '
-                 f'font-size="10" fill="{_C["muted"]}">{keys[-1]}</text></svg>')
-    return "".join(parts)
+function modelTotals(rs){
+  var t = {};
+  rs.forEach(function(r){
+    if (!t[r.m]) t[r.m] = {v:0, l:r.l};
+    t[r.m].v += r.i + r.o; });
+  return Object.keys(t).map(function(m){ return {m:m, v:t[m].v, l:t[m].l}; })
+    .sort(function(a,b){ return b.v - a.v; }); }
+
+function tiles(rs){
+  var calls=0, tin=0, tout=0, saved=0, spend=0;
+  rs.forEach(function(r){ calls += r.c; tin += r.i; tout += r.o;
+    if (r.l) saved += r.s; else spend += r.s; });
+  var t = div("tiles");
+  [["calls", calls.toLocaleString()],
+   ["tokens in / out", fmt(tin) + " / " + fmt(tout)],
+   ["local cost avoided*", "$" + saved.toFixed(2)],
+   ["cloud est. spend*", "$" + spend.toFixed(2)],
+   ["models shown", String(modelTotals(rs).length)]
+  ].forEach(function(kv){
+    var d = document.createElement("div"); d.className = "tile";
+    var b = document.createElement("b"); b.textContent = kv[1];
+    var s = document.createElement("span"); s.textContent = kv[0];
+    d.appendChild(b); d.appendChild(s); t.appendChild(d); }); }
+
+function timeline(rs){
+  var host = div("timeline");
+  var buckets = []; var seen = {};
+  rs.forEach(function(r){ if(!seen[r.b]){ seen[r.b]=1; buckets.push(r.b);} });
+  buckets.sort(); buckets = buckets.slice(-60);
+  if (!buckets.length){ host.textContent = "no events match the current filters";
+    host.className = "empty"; return; }
+  host.className = "";
+  var byb = {local:{}, cloud:{}};
+  rs.forEach(function(r){
+    var k = r.l ? "local" : "cloud";
+    byb[k][r.b] = (byb[k][r.b] || 0) + r.i + r.o; });
+  var names = scope === "all" ? ["local","cloud"] : [scope];
+  var mx = 1;
+  buckets.forEach(function(b){ names.forEach(function(n){
+    mx = Math.max(mx, byb[n][b] || 0); }); });
+  var pad = 10 + fmt(mx).length * 7.5;
+  var w = 720, h = 190, iw = w - pad - 40, ih = h - 42;
+  var svg = el("svg", {viewBox: "0 0 " + w + " " + h, role: "img",
+                       "font-family": "sans-serif"}, host);
+  [0, 0.5, 1].forEach(function(f){
+    var y = 8 + ih * (1 - f);
+    el("line", {x1:pad, y1:y, x2:w-8, y2:y, stroke:C.grid,
+                "stroke-width":1}, svg);
+    el("text", {x:pad-5, y:y+4, "text-anchor":"end", "font-size":10,
+                fill:C.muted}, svg, fmt(mx*f)); });
+  names.forEach(function(n){
+    var pts = buckets.map(function(b, i){
+      return [pad + iw * (buckets.length < 2 ? 0.5 : i/(buckets.length-1)),
+              8 + ih * (1 - (byb[n][b] || 0)/mx)]; });
+    el("polyline", {points: pts.map(function(p){
+        return p[0].toFixed(0) + "," + p[1].toFixed(0); }).join(" "),
+      fill:"none", stroke:C[n], "stroke-width":2}, svg);
+    pts.forEach(function(p, i){
+      var v = byb[n][buckets[i]] || 0; if (!v) return;
+      var c = el("circle", {cx:p[0].toFixed(0), cy:p[1].toFixed(0), r:4,
+                            fill:C[n]}, svg);
+      el("title", {}, c, buckets[i] + " " + n + ": " + v.toLocaleString()
+                        + " tokens"); }); });
+  el("text", {x:pad, y:h-6, "font-size":10, fill:C.muted}, svg, buckets[0]);
+  el("text", {x:w-8, y:h-6, "text-anchor":"end", "font-size":10,
+              fill:C.muted}, svg, buckets[buckets.length-1]);
+  var lg = document.getElementById("legend");
+  while (lg.firstChild) lg.removeChild(lg.firstChild);
+  names.forEach(function(n){
+    var chip = document.createElement("span");
+    chip.className = "chip"; chip.style.background = C[n];
+    lg.appendChild(chip);
+    lg.appendChild(document.createTextNode(" " + n + "  ")); }); }
+
+function bars(hostId, pairs, colorOf){
+  var host = div(hostId);
+  if (!pairs.length){ host.textContent = "no events match the current filters";
+    host.className = "empty"; return; }
+  host.className = "";
+  var shown = pairs.slice(0, 15);
+  var mx = shown[0].v || 1;
+  var bh = 22, gap = 2, w = 720;
+  var svg = el("svg", {viewBox: "0 0 " + w + " " + (shown.length*(bh+gap)+4),
+                       role:"img", "font-family":"sans-serif"}, host);
+  shown.forEach(function(p, i){
+    var y = i * (bh + gap);
+    var bw = Math.max(3, (w - 300) * p.v / mx);
+    el("text", {x:215, y:y+bh-6, "text-anchor":"end", "font-size":12,
+                fill:C.ink}, svg, p.m.length > 32 ? p.m.slice(0,31)+"…" : p.m);
+    var r = el("rect", {x:222, y:y, width:bw.toFixed(0), height:bh-4, rx:2,
+                        fill:colorOf(p)}, svg);
+    el("title", {}, r, p.m + ": " + p.v.toLocaleString() + " tokens");
+    el("text", {x:(226+bw).toFixed(0), y:y+bh-6, "font-size":12,
+                fill:C.muted}, svg, fmt(p.v)); });
+  if (pairs.length > shown.length){
+    var n = document.createElement("div"); n.className = "note";
+    n.textContent = "(+" + (pairs.length - shown.length) + " more in the table)";
+    host.appendChild(n); } }
+
+function render(){
+  var rs = rows();
+  tiles(rs);
+  timeline(rs);
+  bars("modelbars", modelTotals(rs), function(p){
+    return p.l ? C.local : C.cloud; });
+  var pt = {};
+  rs.forEach(function(r){ pt[r.p] = (pt[r.p] || 0) + r.i + r.o; });
+  bars("projbars", Object.keys(pt).map(function(p){
+      return {m:p, v:pt[p]}; }).sort(function(a,b){ return b.v-a.v; }),
+    function(){ return scope === "cloud" ? C.cloud : C.local; });
+  document.getElementById("scopeNote").textContent =
+    scope === "all" ? "" : "axes rescale to the " + scope + " view"; }
+
+document.getElementById("gran").textContent = D.granularity;
+var allModels = modelTotals(D.rows);
+var ml = document.getElementById("mlist");
+allModels.forEach(function(p){
+  var lab = document.createElement("label");
+  var cb = document.createElement("input");
+  cb.type = "checkbox"; cb.checked = true; cb.value = p.m;
+  cb.addEventListener("change", function(){
+    var boxes = ml.querySelectorAll("input");
+    var on = []; boxes.forEach(function(b){ if (b.checked) on.push(b.value); });
+    sel = on.length === boxes.length ? null : new Set(on);
+    render(); });
+  lab.appendChild(cb);
+  var chip = document.createElement("span"); chip.className = "chip";
+  chip.style.background = p.l ? C.local : C.cloud;
+  lab.appendChild(chip);
+  lab.appendChild(document.createTextNode(" " + p.m + " (" + fmt(p.v) + ")"));
+  ml.appendChild(lab); });
+function setAll(state){
+  ml.querySelectorAll("input").forEach(function(b){ b.checked = state; });
+  sel = state ? null : new Set(); render(); }
+document.getElementById("mAll").addEventListener("click",
+  function(){ setAll(true); });
+document.getElementById("mNone").addEventListener("click",
+  function(){ setAll(false); });
+document.querySelectorAll(".scope button").forEach(function(b){
+  b.addEventListener("click", function(){
+    scope = b.getAttribute("data-s");
+    document.querySelectorAll(".scope button").forEach(function(x){
+      x.className = x === b ? "on" : ""; });
+    render(); }); });
+render();
+})();
+</script>
+</body></html>"""
 
 
 def html_report(path, days=None):
@@ -540,91 +739,48 @@ def html_report(path, days=None):
         events = [e for e in events if e["ts"] >= cutoff]
     if not events:
         raise SystemExit("no usage events found in either ledger")
-    loc = [e for e in events if e["local"]]
-    lin = sum(e["tin"] for e in loc)
-    lout = sum(e["tout"] for e in loc)
     series = load_price_series()
-    saved = 0.0
-    priced_models = set()
-    for e in loc:
-        pin, pout, src = as_of_price(e["model"], e["ts"], series)
-        saved += e["tin"] / 1e6 * pin + e["tout"] / 1e6 * pout
-        if src == "model":
-            priced_models.add(normalize_model_name(e["model"]))
-    price_note = (f"per-model hosted rates for {len(priced_models)} model(s), "
-                  f"reference benchmark for the rest"
-                  if priced_models else
-                  "reference benchmark only — run `prices update` for "
-                  "per-model hosted rates")
+    rows, granularity = _agg_rows(events, series)
 
-    span_days = (max(e["ts"] for e in events)[:10] !=
-                 min(e["ts"] for e in events)[:10])
-    blen = 10 if span_days else 13  # daily vs hourly buckets
-    bl, bc = defaultdict(int), defaultdict(int)
+    priced = {normalize_model_name(e["model"]) for e in events if e["local"]
+              and as_of_price(e["model"], e["ts"], series)[2] == "model"}
+    price_note = (f"per-model hosted rates for {len(priced)} local model(s), "
+                  "reference benchmark for the rest" if priced else
+                  "reference benchmark only — run `prices update` "
+                  "for per-model hosted rates")
+
+    # Static, JS-independent fallback table over ALL models.
+    by_model = {}
     for e in events:
-        (bl if e["local"] else bc)[e["ts"][:blen]] += e["tin"] + e["tout"]
-    keys = sorted(set(bl) | set(bc))[-60:]
+        r = by_model.setdefault(e["model"], {"c": 0, "i": 0, "o": 0,
+                                             "l": e["local"]})
+        r["c"] += 1
+        r["i"] += e["tin"]
+        r["o"] += e["tout"]
+    table = "".join(
+        f"<tr><td>{escape_html(m)}</td><td>{'local' if r['l'] else 'cloud'}</td>"
+        f"<td>{r['c']:,}</td><td>{r['i']:,}</td><td>{r['o']:,}</td></tr>"
+        for m, r in sorted(by_model.items(), key=lambda kv: -(kv[1]["i"]
+                                                              + kv[1]["o"])))
 
-    by_model = defaultdict(lambda: [0, False])
-    for e in events:
-        by_model[e["model"]][0] += e["tin"] + e["tout"]
-        by_model[e["model"]][1] = e["local"]
-    top = sorted(by_model.items(), key=lambda kv: -kv[1][0])[:10]
-    model_rows = [(m, v[0]) for m, v in top]
-    model_local = {m: v[1] for m, v in top}
-
-    by_proj = defaultdict(int)
-    for e in loc:
-        by_proj[e["project"]] += e["tin"] + e["tout"]
-    proj_rows = sorted(by_proj.items(), key=lambda kv: -kv[1])[:8]
-
-    tiles = "".join(
-        f'<div class="tile"><b>{v}</b><span>{k}</span></div>' for k, v in [
-            ("local calls", f"{len(loc):,}"),
-            ("local tokens in / out", f"{_fmt_m(lin)} / {_fmt_m(lout)}"),
-            ("est. saved vs Azure*", f"${saved:,.2f}"),
-            ("projects using local", f"{len(by_proj)}"),
-            ("all-provider events", f"{len(events):,}"),
-        ])
-    legend = (f'<span class="chip" style="background:{_C["local"]}"></span> local '
-              f'&nbsp; <span class="chip" style="background:{_C["cloud"]}"></span> cloud')
-    table = "".join(f"<tr><td>{m}</td><td>{'local' if l else 'cloud'}</td>"
-                    f"<td>{v:,}</td></tr>" for m, (v, l) in top)
-    html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LLM usage ledger report</title><style>
-body{{font-family:-apple-system,Segoe UI,sans-serif;background:{_C["surface"]};
- color:{_C["ink"]};max-width:760px;margin:0 auto;padding:20px;line-height:1.4}}
-h1{{font-size:1.15rem}} h2{{font-size:.95rem;margin:20px 0 6px}}
-.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}}
-.tile{{background:#fff;border:1px solid {_C["grid"]};border-radius:8px;
- padding:10px;text-align:center}} .tile b{{display:block;font-size:1.05rem}}
-.tile span{{font-size:.7rem;color:{_C["muted"]}}}
-.chip{{display:inline-block;width:10px;height:10px;border-radius:2px}}
-.note{{font-size:.72rem;color:{_C["muted"]}}}
-table{{border-collapse:collapse;font-size:.8rem}} td{{border:1px solid {_C["grid"]};
- padding:3px 8px}} summary{{cursor:pointer;font-size:.85rem;margin-top:14px}}
-</style></head><body>
-<h1>LLM usage ledger report</h1>
-<div class="note">generated {datetime.datetime.now().astimezone().isoformat(timespec="minutes")}
- · sources: ~/.llm_token_ledger/ledger.jsonl + lmstudio-*.jsonl
- · {"last %g days" % days if days else "all time"}</div>
-<div class="tiles">{tiles}</div>
-<h2>Tokens over time ({"daily" if blen == 10 else "hourly"}) &nbsp; {legend}</h2>
-{_timeline_svg(bl, bc, keys)}
-<h2>Top models by tokens</h2>
-{_bars_svg(model_rows, lambda m: _C["local"] if model_local.get(m) else _C["cloud"])}
-<h2>Local tokens by project</h2>
-{_bars_svg(proj_rows, lambda _: _C["local"])}
-<details><summary>Data table (top models)</summary>
-<table><tr><td><b>model</b></td><td><b>provider</b></td><td><b>tokens</b></td></tr>
-{table}</table></details>
-<p class="note">*savings = local tokens priced at what the same usage would
- have cost hosted, joined as-of each event's date against the append-only
- price series ({price_note}). The marginal cost actually paid was $0.</p>
-</body></html>"""
+    data_json = json.dumps({"rows": rows, "granularity": granularity}
+                           ).replace("</", "<\\/")
+    html = (_HTML_TEMPLATE
+            .replace("@@GENERATED@@", datetime.datetime.now().astimezone()
+                     .isoformat(timespec="minutes"))
+            .replace("@@SPAN@@", ("last %g days" % days) if days else "all time")
+            .replace("@@TABLE@@", table)
+            .replace("@@PRICENOTE@@", escape_html(price_note))
+            .replace("@@DATA@@", data_json))
     Path(path).write_text(html)
-    print(f"wrote {path} ({len(events):,} events, {len(loc):,} local)")
+    n_local = sum(1 for e in events if e["local"])
+    print(f"wrote {path} ({len(events):,} events, {n_local:,} local, "
+          f"{len(rows):,} chart rows)")
+
+
+def escape_html(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
 
 
 # -------------------------------------------------------------------- cli
