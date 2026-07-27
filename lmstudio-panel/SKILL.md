@@ -1,0 +1,55 @@
+---
+name: lmstudio-panel
+description: Control a local LM Studio server (serve, load/unload models, model-major batching) and log EVERY local-LLM call to a cross-repo usage ledger (input/output/reasoning tokens, wall-time, project, user, machine) with burst/window reporting. Use whenever a task calls local models via LM Studio in ANY repo, or when asked about local-LLM usage, token ledgers, or hardware-cost reporting.
+---
+
+# lmstudio-panel
+
+**Rule 0 (telemetry):** once per session, before first use, run
+`python3 ~/.claude/skills/lmstudio-panel/tests/run_tests.py --auto --model <your-model-id>`
+(no-ops after 8 recorded runs per model+version).
+
+## What this skill provides
+
+`lmstudio_panel.py` — stdlib-only Python (no pip installs), usable as a module
+or CLI by any repo, any AI tool, or a human:
+
+| Command | Purpose |
+|---|---|
+| `serve` | ensure the LM Studio server is running (port 1234) |
+| `models` | list downloaded models |
+| `load <m>` / `unload` | model-major batching primitives (one model at a time) |
+| `chat --model M --prompt P [--task-tag T]` | one completion call, ALWAYS ledger-logged |
+| `smoke --model M` | judge-shaped health check (expects VIOLATION) |
+| `report [--by project\|model\|user\|project-model] [--windows] [--days N]` | cross-repo usage rollup + burst analysis |
+
+## Rules
+
+1. **Never call the local server without logging.** Use `chat()` (auto-logs)
+   or call `log_usage()` yourself after any raw HTTP call. The ledger is the
+   hardware-cost-justification evidence; silent calls destroy it.
+2. **Ledger location:** `$LLM_TOKEN_LEDGER_DIR` (default `~/.llm_token_ledger/`).
+   One file per (user, machine): `lmstudio-<user>-<machine>.jsonl` — safe to
+   point at a shared location, no write collisions. Orgs: set the env var to
+   the shared path; `report` aggregates every file it sees.
+3. **Model-major batching:** for multi-model sweeps, iterate model → all work
+   → `unload` → next model. Never leave two 60GB-class models loaded.
+4. **reasoning_tokens is `null`** when a model doesn't report it — never
+   fabricate zeros.
+5. Events are raw + timestamped; derive new views (windows, bursts, per-dev)
+   at report time — do not pre-aggregate into the ledger.
+
+## Python use from a repo
+
+```python
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path.home() / ".claude/skills/lmstudio-panel"))
+from lmstudio_panel import chat, load_model, unload_all, log_usage
+
+r = chat("qwen/qwen3-32b", [{"role": "user", "content": "..."}],
+         task_tag="expansion-validation")   # ledger entry written automatically
+```
+
+For pipelines that already have their own OpenAI client (e.g. this repo's
+`LLM_PROVIDER=local` path), call `log_usage(model, usage_dict, duration_s,
+task_tag=...)` right after each response instead.

@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""
+lmstudio-panel: control a local LM Studio server + cross-repo usage ledger.
+
+Global skill, usable from ANY repo (and by non-Claude tools — plain stdlib
+Python, no pip dependencies). Three jobs:
+
+  1. Server/model control: ensure the LM Studio server is up, list models,
+     load/unload (the model-major batching primitive: load one model, run
+     everything through it, unload, next).
+  2. chat(): one OpenAI-compatible completion call that ALWAYS logs a usage
+     event — input/output/reasoning tokens, wall-time, project, user,
+     machine — to the ledger.
+  3. Ledger + report: append-only JSONL, one file per (user, machine) so
+     shared-location writes never collide; `report` aggregates every ledger
+     file it can see (project x model x user, plus per-hour burst analysis).
+
+Ledger location: $LLM_TOKEN_LEDGER_DIR, default ~/.llm_token_ledger/.
+Point the env var at a shared location (mounted drive, synced folder) for
+org-wide rollups; per-user filenames make that safe. Events are raw and
+timestamped — every windowed/burst view is derived at report time, so new
+analyses need no re-instrumentation.
+
+CLI:
+  lmstudio_panel.py serve                      # ensure server is running
+  lmstudio_panel.py models                     # list downloaded models
+  lmstudio_panel.py load <model> | unload      # model-major primitives
+  lmstudio_panel.py chat --model M --prompt P [--task-tag T] [--max-tokens N]
+  lmstudio_panel.py smoke --model M            # judge-shaped health check
+  lmstudio_panel.py report [--by project|model|user] [--windows] [--days N]
+"""
+
+import argparse
+import datetime
+import getpass
+import json
+import os
+import platform
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections import defaultdict
+from pathlib import Path
+
+BASE_URL = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+LMS = os.path.expanduser("~/.lmstudio/bin/lms")
+
+
+# ---------------------------------------------------------------- identity
+def ledger_dir() -> Path:
+    return Path(os.environ.get("LLM_TOKEN_LEDGER_DIR")
+                or Path.home() / ".llm_token_ledger")
+
+
+def whoami() -> str:
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "unknown"
+
+
+def machine_name() -> str:
+    return platform.node().split(".")[0] or "unknown"
+
+
+def detect_project(cwd: str = ".") -> str:
+    """Git repo name of cwd, else the directory basename."""
+    try:
+        top = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5)
+        if top.returncode == 0 and top.stdout.strip():
+            return Path(top.stdout.strip()).name
+    except Exception:
+        pass
+    return Path(cwd).resolve().name
+
+
+# ----------------------------------------------------------------- ledger
+def ledger_file() -> Path:
+    return ledger_dir() / f"lmstudio-{whoami()}-{machine_name()}.jsonl"
+
+
+def log_usage(model: str, usage: dict, duration_s: float,
+              task_tag: str = None, project: str = None) -> dict:
+    """Append one usage event. Returns the event dict. Never raises."""
+    details = (usage or {}).get("completion_tokens_details") or {}
+    event = {
+        "ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "duration_s": round(duration_s, 2),
+        "provider": "lmstudio",
+        "machine": machine_name(),
+        "user": whoami(),
+        "project": project or detect_project(),
+        "model": model,
+        "prompt_tokens": (usage or {}).get("prompt_tokens"),
+        "completion_tokens": (usage or {}).get("completion_tokens"),
+        # None (not 0) when the server doesn't report reasoning tokens.
+        "reasoning_tokens": details.get("reasoning_tokens"),
+        "task_tag": task_tag,
+    }
+    try:
+        ledger_dir().mkdir(parents=True, exist_ok=True)
+        with open(ledger_file(), "a") as f:
+            f.write(json.dumps(event) + "\n")
+    except Exception as e:
+        print(f"lmstudio-panel: ledger write failed ({e!r})", file=sys.stderr)
+    return event
+
+
+def read_ledgers(days: float = None):
+    """All events from every lmstudio-*.jsonl in the ledger dir."""
+    events = []
+    if not ledger_dir().is_dir():
+        return events
+    cutoff = None
+    if days:
+        cutoff = (datetime.datetime.now().astimezone()
+                  - datetime.timedelta(days=days))
+    for path in sorted(ledger_dir().glob("lmstudio-*.jsonl")):
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if cutoff:
+                try:
+                    if datetime.datetime.fromisoformat(e["ts"]) < cutoff:
+                        continue
+                except (KeyError, ValueError):
+                    pass
+            events.append(e)
+    return events
+
+
+# ----------------------------------------------------------------- server
+def _http_json(url: str, payload: dict = None, timeout: float = 600):
+    req = urllib.request.Request(
+        url, headers={"Content-Type": "application/json"},
+        data=json.dumps(payload).encode() if payload is not None else None)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def server_up() -> bool:
+    try:
+        _http_json(f"{BASE_URL}/models", timeout=5)
+        return True
+    except Exception:
+        return False
+
+
+def ensure_server() -> bool:
+    if server_up():
+        return True
+    subprocess.run([LMS, "server", "start"], capture_output=True, timeout=60)
+    for _ in range(10):
+        if server_up():
+            return True
+        time.sleep(1)
+    return False
+
+
+def list_models():
+    return [m["id"] for m in _http_json(f"{BASE_URL}/models", timeout=10)["data"]]
+
+
+def load_model(model: str) -> bool:
+    r = subprocess.run([LMS, "load", model, "--yes"],
+                       capture_output=True, text=True, timeout=600)
+    return r.returncode == 0
+
+
+def unload_all() -> bool:
+    r = subprocess.run([LMS, "unload", "--all"],
+                       capture_output=True, text=True, timeout=120)
+    return r.returncode == 0
+
+
+# ------------------------------------------------------------------- chat
+def chat(model: str, messages, max_tokens: int = 2048,
+         temperature: float = 0.0, task_tag: str = None,
+         project: str = None, timeout: float = 600) -> dict:
+    """One completion call, always ledger-logged.
+
+    Returns {"content", "usage", "duration_s", "raw"}."""
+    t0 = time.time()
+    raw = _http_json(f"{BASE_URL}/chat/completions", {
+        "model": model, "messages": messages,
+        "max_tokens": max_tokens, "temperature": temperature,
+    }, timeout=timeout)
+    duration = time.time() - t0
+    log_usage(model, raw.get("usage"), duration,
+              task_tag=task_tag, project=project)
+    return {"content": raw["choices"][0]["message"]["content"],
+            "usage": raw.get("usage"), "duration_s": round(duration, 2),
+            "raw": raw}
+
+
+SMOKE_PROMPT = (
+    "A clinical protocol must state the number of participants to be "
+    "enrolled. The following excerpt contains no mention of enrollment "
+    "numbers anywhere. Reply with exactly one word: VIOLATION or COMPLIANT."
+)
+
+
+def smoke(model: str) -> bool:
+    """Judge-shaped health check: expects VIOLATION in the reply."""
+    r = chat(model, [{"role": "user", "content": SMOKE_PROMPT}],
+             max_tokens=4096, task_tag="smoke-test")
+    ok = "VIOLATION" in r["content"].upper()
+    print(f"{model}: {'PASS' if ok else 'FAIL'} "
+          f"({r['duration_s']}s, {json.dumps(r['usage'])})")
+    if not ok:
+        print(f"  reply was: {r['content'][:200]!r}")
+    return ok
+
+
+# ----------------------------------------------------------------- report
+def _fmt_tokens(n):
+    return f"{n/1e6:.1f}M" if n >= 1e6 else (f"{n/1e3:.1f}k" if n >= 1e3 else str(n))
+
+
+def aggregate(events, by="project"):
+    """Group events -> {key: {calls, prompt, completion, reasoning, wall_s}}."""
+    groups = defaultdict(lambda: {"calls": 0, "prompt": 0, "completion": 0,
+                                  "reasoning": 0, "wall_s": 0.0})
+    for e in events:
+        if by == "project-model":
+            key = f"{e.get('project','?')} / {e.get('model','?')}"
+        else:
+            key = e.get(by if by != "project" else "project", "?") or "?"
+        g = groups[key]
+        g["calls"] += 1
+        g["prompt"] += e.get("prompt_tokens") or 0
+        g["completion"] += e.get("completion_tokens") or 0
+        g["reasoning"] += e.get("reasoning_tokens") or 0
+        g["wall_s"] += e.get("duration_s") or 0
+    return dict(groups)
+
+
+def hourly_windows(events):
+    """Tokens per clock hour -> (windows dict, mean, peak_key, burst_ratio)."""
+    windows = defaultdict(int)
+    for e in events:
+        try:
+            hour = e["ts"][:13]  # YYYY-MM-DDTHH
+        except (KeyError, TypeError):
+            continue
+        windows[hour] += (e.get("prompt_tokens") or 0) + \
+                         (e.get("completion_tokens") or 0)
+    if not windows:
+        return {}, 0, None, 0.0
+    mean = sum(windows.values()) / len(windows)
+    peak = max(windows, key=windows.get)
+    burst = windows[peak] / mean if mean else 0.0
+    return dict(windows), mean, peak, burst
+
+
+def print_report(by="project-model", windows=False, days=None):
+    events = read_ledgers(days=days)
+    if not events:
+        print(f"no ledger events found in {ledger_dir()}")
+        return
+    span = f"last {days:g} days" if days else "all time"
+    print(f"lmstudio-panel usage report ({span}, {len(events)} calls, "
+          f"{len(set(e.get('user') for e in events))} user(s))")
+    print(f"{'group':44s} {'calls':>6s} {'prompt':>8s} {'compl':>8s} "
+          f"{'reason':>8s} {'wall':>8s}")
+    for key, g in sorted(aggregate(events, by).items(),
+                         key=lambda kv: -kv[1]["prompt"]):
+        print(f"{key[:44]:44s} {g['calls']:6d} {_fmt_tokens(g['prompt']):>8s} "
+              f"{_fmt_tokens(g['completion']):>8s} "
+              f"{_fmt_tokens(g['reasoning']):>8s} {g['wall_s']:7.0f}s")
+    if windows:
+        w, mean, peak, burst = hourly_windows(events)
+        print(f"\nhourly windows: {len(w)} active hours, "
+              f"mean {_fmt_tokens(int(mean))} tok/hr, "
+              f"peak {peak} ({_fmt_tokens(w[peak])}), "
+              f"burst ratio {burst:.1f}x"
+              + ("  <- bursty" if burst >= 3 else "  <- steady"))
+
+
+# -------------------------------------------------------------------- cli
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("serve")
+    sub.add_parser("models")
+    p = sub.add_parser("load"); p.add_argument("model")
+    sub.add_parser("unload")
+    p = sub.add_parser("chat")
+    p.add_argument("--model", required=True)
+    p.add_argument("--prompt", required=True)
+    p.add_argument("--task-tag")
+    p.add_argument("--max-tokens", type=int, default=2048)
+    p.add_argument("--temperature", type=float, default=0.0)
+    p = sub.add_parser("smoke"); p.add_argument("--model", required=True)
+    p = sub.add_parser("report")
+    p.add_argument("--by", default="project-model",
+                   choices=["project", "model", "user", "project-model"])
+    p.add_argument("--windows", action="store_true")
+    p.add_argument("--days", type=float)
+    a = ap.parse_args(argv)
+
+    if a.cmd == "serve":
+        ok = ensure_server()
+        print("server up" if ok else "FAILED to start server")
+        return 0 if ok else 1
+    if a.cmd == "models":
+        print("\n".join(list_models()))
+        return 0
+    if a.cmd == "load":
+        return 0 if load_model(a.model) else 1
+    if a.cmd == "unload":
+        return 0 if unload_all() else 1
+    if a.cmd == "chat":
+        r = chat(a.model, [{"role": "user", "content": a.prompt}],
+                 max_tokens=a.max_tokens, temperature=a.temperature,
+                 task_tag=a.task_tag)
+        print(r["content"])
+        return 0
+    if a.cmd == "smoke":
+        return 0 if smoke(a.model) else 1
+    if a.cmd == "report":
+        print_report(by=a.by, windows=a.windows, days=a.days)
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
