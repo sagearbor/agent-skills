@@ -38,6 +38,7 @@ import os
 import platform
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -46,6 +47,15 @@ from pathlib import Path
 
 BASE_URL = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
 LMS = os.path.expanduser("~/.lmstudio/bin/lms")
+SCHEMA_VERSION = 1
+_write_lock = threading.Lock()
+
+# Reference cloud rates for savings estimates ($/1M tokens). Versioned +
+# dated so historical reports stay reproducible: add entries, never edit.
+CLOUD_REFERENCE_RATES = {
+    "2026-07": {"input_per_m": 2.50, "output_per_m": 10.00},
+}
+CURRENT_RATE_KEY = "2026-07"
 
 
 # ---------------------------------------------------------------- identity
@@ -85,9 +95,11 @@ def ledger_file() -> Path:
 
 def log_usage(model: str, usage: dict, duration_s: float,
               task_tag: str = None, project: str = None) -> dict:
-    """Append one usage event. Returns the event dict. Never raises."""
+    """Append one usage event (schema-versioned, thread-safe).
+    Returns the event dict. Never raises. TOKEN_LEDGER_DISABLED=1 disables."""
     details = (usage or {}).get("completion_tokens_details") or {}
     event = {
+        "schema": SCHEMA_VERSION,
         "ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "duration_s": round(duration_s, 2),
         "provider": "lmstudio",
@@ -101,17 +113,44 @@ def log_usage(model: str, usage: dict, duration_s: float,
         "reasoning_tokens": details.get("reasoning_tokens"),
         "task_tag": task_tag,
     }
+    if os.getenv("TOKEN_LEDGER_DISABLED", "").lower() in ("1", "true", "yes"):
+        return event
     try:
-        ledger_dir().mkdir(parents=True, exist_ok=True)
-        with open(ledger_file(), "a") as f:
-            f.write(json.dumps(event) + "\n")
+        with _write_lock:
+            ledger_dir().mkdir(parents=True, exist_ok=True)
+            with open(ledger_file(), "a") as f:
+                f.write(json.dumps(event) + "\n")
     except Exception as e:
         print(f"lmstudio-panel: ledger write failed ({e!r})", file=sys.stderr)
     return event
 
 
-def read_ledgers(days: float = None):
-    """All events from every lmstudio-*.jsonl in the ledger dir."""
+def _normalize(e: dict) -> dict:
+    """Map any known ledger schema to the skill's event shape. Currently:
+    the skill's own schema (passthrough) and the tokens_in/tokens_out shape
+    written by in-repo LLM-client hooks (e.g. token_ledger.py)."""
+    if "tokens_in" in e or "tokens_out" in e:
+        return {"schema": e.get("schema"), "ts": e.get("ts", ""),
+                "duration_s": e.get("duration_s"),
+                "provider": e.get("provider", "?"),
+                "machine": e.get("machine", machine_name()),
+                "user": e.get("user", whoami()),
+                "project": e.get("project", "?"), "model": e.get("model", "?"),
+                "prompt_tokens": e.get("tokens_in") or 0,
+                "completion_tokens": e.get("tokens_out") or 0,
+                "reasoning_tokens": e.get("reasoning_tokens"),
+                "task_tag": e.get("task_tag")}
+    return e
+
+
+def is_local_event(e: dict) -> bool:
+    return e.get("provider") in ("lmstudio", "local", "ollama", "mlx")
+
+
+def read_ledgers(days: float = None, scope: str = "skill"):
+    """Events from the ledger dir. scope='skill' reads only this skill's
+    lmstudio-*.jsonl files; scope='all' reads EVERY *.jsonl (any writer,
+    any schema _normalize knows), so reports cover a whole org drop-dir."""
     events = []
     if not ledger_dir().is_dir():
         return events
@@ -119,13 +158,16 @@ def read_ledgers(days: float = None):
     if days:
         cutoff = (datetime.datetime.now().astimezone()
                   - datetime.timedelta(days=days))
-    for path in sorted(ledger_dir().glob("lmstudio-*.jsonl")):
+    pattern = "*.jsonl" if scope == "all" else "lmstudio-*.jsonl"
+    for path in sorted(ledger_dir().glob(pattern)):
         for line in path.read_text().splitlines():
             if not line.strip():
                 continue
             try:
-                e = json.loads(line)
-            except json.JSONDecodeError:
+                e = _normalize(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not e.get("ts"):
                 continue
             if cutoff:
                 try:
@@ -262,7 +304,7 @@ def hourly_windows(events):
 
 
 def print_report(by="project-model", windows=False, days=None):
-    events = read_ledgers(days=days)
+    events = read_ledgers(days=days, scope="all")
     if not events:
         print(f"no ledger events found in {ledger_dir()}")
         return
@@ -293,25 +335,12 @@ _C = {"local": "#2a78d6", "cloud": "#008300", "ink": "#1c2733",
 
 
 def _all_usage_events():
-    """Normalized events from BOTH ledgers: the skill's lmstudio-*.jsonl and
-    the repo-agnostic ~/.llm_token_ledger/ledger.jsonl (LLMClient hook)."""
-    out = []
-    for e in read_ledgers():  # skill ledger
-        out.append({"ts": e.get("ts", ""), "local": True,
-                    "model": e.get("model", "?"), "project": e.get("project", "?"),
-                    "tin": e.get("prompt_tokens") or 0,
-                    "tout": e.get("completion_tokens") or 0})
-    repo_ledger = ledger_dir() / "ledger.jsonl"
-    if repo_ledger.exists():
-        for line in repo_ledger.read_text().splitlines():
-            try:
-                e = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            out.append({"ts": e.get("ts", ""), "local": e.get("provider") == "local",
-                        "model": e.get("model", "?"), "project": e.get("project", "?"),
-                        "tin": e.get("tokens_in") or 0, "tout": e.get("tokens_out") or 0})
-    return [e for e in out if e["ts"]]
+    """Every event any writer dropped in the ledger dir, in chart shape."""
+    return [{"ts": e["ts"], "local": is_local_event(e),
+             "model": e.get("model", "?"), "project": e.get("project", "?"),
+             "tin": e.get("prompt_tokens") or 0,
+             "tout": e.get("completion_tokens") or 0}
+            for e in read_ledgers(scope="all")]
 
 
 def _fmt_m(n):
@@ -391,7 +420,9 @@ def html_report(path, days=None):
     loc = [e for e in events if e["local"]]
     lin = sum(e["tin"] for e in loc)
     lout = sum(e["tout"] for e in loc)
-    saved = lin / 1e6 * 2.50 + lout / 1e6 * 10.00  # Azure ref rates 2026-07
+    rates = CLOUD_REFERENCE_RATES[CURRENT_RATE_KEY]
+    saved = (lin / 1e6 * rates["input_per_m"]
+             + lout / 1e6 * rates["output_per_m"])
 
     span_days = (max(e["ts"] for e in events)[:10] !=
                  min(e["ts"] for e in events)[:10])
@@ -455,8 +486,9 @@ table{{border-collapse:collapse;font-size:.8rem}} td{{border:1px solid {_C["grid
 <details><summary>Data table (top models)</summary>
 <table><tr><td><b>model</b></td><td><b>provider</b></td><td><b>tokens</b></td></tr>
 {table}</table></details>
-<p class="note">*savings = local tokens priced at Azure reference rates
- (2026-07: $2.50/M in, $10.00/M out) — the marginal cost actually paid was $0.</p>
+<p class="note">*savings = local tokens priced at cloud reference rates
+ ({CURRENT_RATE_KEY}: ${rates["input_per_m"]}/M in, ${rates["output_per_m"]}/M out)
+ — the marginal cost actually paid was $0.</p>
 </body></html>"""
     Path(path).write_text(html)
     print(f"wrote {path} ({len(events):,} events, {len(loc):,} local)")

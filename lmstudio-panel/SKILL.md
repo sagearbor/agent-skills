@@ -50,6 +50,24 @@ r = chat("qwen/qwen3-32b", [{"role": "user", "content": "..."}],
          task_tag="expansion-validation")   # ledger entry written automatically
 ```
 
-For pipelines that already have their own OpenAI client (e.g. this repo's
+For pipelines that already have their own OpenAI client (e.g. an
 `LLM_PROVIDER=local` path), call `log_usage(model, usage_dict, duration_s,
 task_tag=...)` right after each response instead.
+
+## Instrumenting any repo's own LLM client (3 lines)
+
+A repo does NOT need to route calls through this skill to be counted — hook
+its client's success path once:
+
+```python
+from lmstudio_panel import log_usage   # (sys.path trick above)
+# right after each successful completion:
+log_usage(model, response_usage_dict, duration_s, task_tag="my-pipeline")
+```
+
+Repos with their own writer (like llm-as-judge's `token_ledger.py`) are also
+fine AS-IS: `report`/`report --html` read **every `*.jsonl` in the ledger
+dir** and normalize both schemas (`prompt_tokens/completion_tokens` and
+`tokens_in/tokens_out`). One drop-dir, any writer, one merged report — set
+`LLM_TOKEN_LEDGER_DIR` to a shared location for org-wide rollups.
+

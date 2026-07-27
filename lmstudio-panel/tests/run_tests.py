@@ -93,6 +93,27 @@ def run_suite():
         files[0].write_text(files[0].read_text() + "NOT JSON\n")
         check("corrupt_line_tolerated", len(lp.read_ledgers()) == 3)
 
+        # 8. scope='all' merges foreign-writer schemas (tokens_in/tokens_out)
+        (Path(td) / "ledger.jsonl").write_text(json.dumps(
+            {"schema": 1, "ts": "2026-07-27T12:00:00-04:00",
+             "provider": "local", "model": "other-writer-model",
+             "tokens_in": 500, "tokens_out": 40,
+             "project": "another-repo"}) + "\n")
+        merged = lp.read_ledgers(scope="all")
+        norm = [e for e in merged if e.get("model") == "other-writer-model"]
+        check("foreign_schema_merged", len(merged) == 4 and len(norm) == 1
+              and norm[0]["prompt_tokens"] == 500
+              and lp.is_local_event(norm[0]),
+              f"merged={len(merged)} norm={norm!r}")
+
+        # 9. html report renders from the merged dir
+        out = Path(td) / "report.html"
+        lp.html_report(out)
+        html = out.read_text()
+        check("html_report_renders", "<svg" in html and "another-repo" in html
+              and "est. saved" in html.lower() or "saved" in html,
+              "missing svg/project/savings")
+
     os.environ.pop("LLM_TOKEN_LEDGER_DIR", None)
 
     # 8. project auto-detect returns a non-empty string
