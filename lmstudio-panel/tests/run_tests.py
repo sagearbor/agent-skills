@@ -159,6 +159,52 @@ def run_suite():
               and "<table>" in html,              # JS-independent fallback
               "missing data island / filters / table")
 
+        # 9a2. claude-code ingest: parse fixture transcript, idempotent merge
+        fake_home = Path(td) / "home"
+        proj = fake_home / ".claude" / "projects" / "-Users-x-repo"
+        proj.mkdir(parents=True)
+        line = json.dumps({"uuid": "u-1", "timestamp": "2026-07-27T01:02:03Z",
+                           "cwd": "/Users/x/repo",
+                           "message": {"model": "claude-sonnet-5", "usage": {
+                               "input_tokens": 10,
+                               "cache_creation_input_tokens": 90,
+                               "cache_read_input_tokens": 1000,
+                               "output_tokens": 20}}})
+        (proj / "sess.jsonl").write_text(line + "\nnot json but no usage\n")
+        real_home = Path.home
+        Path.home = staticmethod(lambda: fake_home)  # noqa
+        try:
+            lp.ingest_claude_code()
+            lp.ingest_claude_code()  # second run must not duplicate
+        finally:
+            Path.home = real_home
+        derived = list(Path(td).glob("claude-code-*.jsonl"))
+        ok = False
+        if len(derived) == 1:
+            recs = [json.loads(l) for l in
+                    derived[0].read_text().splitlines()]
+            ok = (len(recs) == 1 and recs[0]["prompt_tokens"] == 100
+                  and recs[0]["cache_read_tokens"] == 1000
+                  and recs[0]["subscription"] is True
+                  and recs[0]["project"] == "repo")
+        check("claude_code_ingest", ok, f"derived={derived!r}")
+
+        # 9a3. subscription rows separate in aggregation + cache discount
+        (Path(td) / "prices.jsonl").write_text(
+            (Path(td) / "prices.jsonl").read_text()
+            + '{"ts":"2026-07-01","model":"claude-sonnet-5",'
+              '"input_per_m":3.0,"output_per_m":15.0,"source":"t"}\n')
+        ev = lp._all_usage_events()
+        sub = [e for e in ev if e["sub"]]
+        rows2, _g = lp._agg_rows(ev, lp.load_price_series())
+        subrow = [r for r in rows2 if r["u"]]
+        # 100 in @$3 + 20 out @$15 + 1000 cache @$0.3 => 0.0003+0.0003+0.0003
+        expect = 100/1e6*3.0 + 20/1e6*15.0 + 1000/1e6*0.3
+        check("subscription_agg_and_cache_price",
+              len(sub) == 1 and len(subrow) == 1
+              and abs(subrow[0]["s"] - round(expect, 4)) < 1e-6,
+              f"sub={sub!r} subrow={subrow!r} expect={expect}")
+
         # 9b. hostile model name cannot break out of the static table
         lp.log_usage("<script>alert(1)</script>", {"prompt_tokens": 1,
                                                    "completion_tokens": 1}, 0.1)

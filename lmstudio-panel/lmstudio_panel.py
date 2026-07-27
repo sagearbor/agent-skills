@@ -366,7 +366,11 @@ def _same_model(target: str, key_norm: str) -> bool:
         return True
     if key_norm.startswith(target):
         rest = key_norm[len(target):]
-        return rest in _PRECISION_SUFFIXES
+        if rest in _PRECISION_SUFFIXES:
+            return True
+        # dated snapshot of the same model, e.g. claude-sonnet-5-20250929
+        return (len(rest) == 9 and rest.startswith("-20")
+                and rest[1:].isdigit())
     return False
 
 
@@ -450,6 +454,103 @@ def as_of_price(model: str, ts: str, series: dict):
     return rates["input_per_m"], rates["output_per_m"], "builtin"
 
 
+# ------------------------------------------------------------------ ingest
+# Subscription-usage importers (2026-07-27, Sage's defend-the-plan case):
+# flat-fee tools (Claude Code Max, Codex) don't hit the ledger, but their
+# local transcripts record per-message tokens. `ingest claude-code` derives
+# ledger events from ~/.claude/projects transcripts into ONE derived file,
+# merged by message UUID — re-running never duplicates, and history already
+# ingested survives the tool's own transcript pruning. Records carry
+# subscription=true: reports price them at API rates as "what the plan
+# absorbed", never mixed into local savings or cloud spend.
+INGEST_CONTACT = "sage.arbor@duke.edu"
+
+
+def _ingest_derived_file(tool: str) -> Path:
+    return ledger_dir() / f"{tool}-{whoami()}-{machine_name()}.jsonl"
+
+
+def _ingest_error(tool: str, n_errors: int, sample: str):
+    log = ledger_dir() / f"ingest-errors-{tool}.log"
+    with open(log, "a") as f:
+        f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} "
+                f"{n_errors} unparsed lines; sample: {sample[:400]}\n")
+    print(f"ingest {tool}: {n_errors} lines not understood — logged to {log}."
+          f"\nPlease email that file to {INGEST_CONTACT} so the importer "
+          f"can be fixed.", file=sys.stderr)
+
+
+def ingest_claude_code():
+    """Derive subscription-usage events from Claude Code transcripts."""
+    src = Path.home() / ".claude" / "projects"
+    if not src.is_dir():
+        print("ingest claude-code: no ~/.claude/projects found — nothing to do")
+        return
+    out = _ingest_derived_file("claude-code")
+    existing = {}
+    if out.exists():
+        for line in out.read_text().splitlines():
+            try:
+                e = json.loads(line)
+                existing[e.get("src_id")] = e
+            except json.JSONDecodeError:
+                continue
+    n_new = n_err = 0
+    sample_err = ""
+    for f in src.glob("*/*.jsonl"):
+        for line in f.read_text(errors="replace").splitlines():
+            if '"usage"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+                msg = d.get("message") or {}
+                u = msg.get("usage") or {}
+                tin = (u.get("input_tokens") or 0) + \
+                      (u.get("cache_creation_input_tokens") or 0)
+                tout = u.get("output_tokens") or 0
+                cr = u.get("cache_read_input_tokens") or 0
+                if not (tin or tout or cr):
+                    continue
+                sid = d.get("uuid") or f"{f.name}:{d.get('timestamp')}"
+                if sid in existing:
+                    continue
+                cwd = d.get("cwd") or ""
+                existing[sid] = {
+                    "schema": SCHEMA_VERSION, "src_id": sid,
+                    "ts": (d.get("timestamp") or "").replace("Z", "+00:00"),
+                    "provider": "claude-code", "subscription": True,
+                    "machine": machine_name(), "user": whoami(),
+                    "project": Path(cwd).name if cwd else f.parent.name,
+                    "model": msg.get("model") or "claude-unknown",
+                    "prompt_tokens": tin, "completion_tokens": tout,
+                    "cache_read_tokens": cr, "task_tag": "claude-code"}
+                n_new += 1
+            except Exception as e:
+                n_err += 1
+                sample_err = sample_err or f"{e!r}: {line[:200]}"
+    with _write_lock:
+        ledger_dir().mkdir(parents=True, exist_ok=True)
+        with open(out, "w") as fh:
+            for e in existing.values():
+                fh.write(json.dumps(e) + "\n")
+    print(f"ingest claude-code: {n_new} new events, {len(existing)} total "
+          f"-> {out}")
+    if n_err:
+        _ingest_error("claude-code", n_err, sample_err)
+
+
+def ingest_codex():
+    """Codex CLI importer — stub until a real session format is in hand."""
+    src = Path.home() / ".codex"
+    if not src.is_dir():
+        print("ingest codex: no ~/.codex found on this machine — nothing to do")
+        return
+    files = list(src.rglob("*.jsonl"))
+    print(f"ingest codex: found {len(files)} session file(s) but this "
+          f"importer doesn't know the Codex format yet.\nPlease email one "
+          f"redacted sample file to {INGEST_CONTACT} so it can be added.")
+
+
 # ------------------------------------------------------------- html report
 # Colors: validated categorical palette (dataviz reference instance);
 # slots 3-4 sit <3:1 on the surface, so every bar carries a value label.
@@ -460,9 +561,11 @@ _C = {"local": "#2a78d6", "cloud": "#008300", "ink": "#1c2733",
 def _all_usage_events():
     """Every event any writer dropped in the ledger dir, in chart shape."""
     return [{"ts": e["ts"], "local": is_local_event(e),
+             "sub": bool(e.get("subscription")),
              "model": e.get("model", "?"), "project": e.get("project", "?"),
              "tin": e.get("prompt_tokens") or 0,
-             "tout": e.get("completion_tokens") or 0}
+             "tout": e.get("completion_tokens") or 0,
+             "cr": e.get("cache_read_tokens") or 0}
             for e in read_ledgers(scope="all")]
 
 
@@ -480,16 +583,19 @@ def _agg_rows(events, series):
     blen = 10 if span_days else 13  # daily vs hourly buckets
     agg = {}
     for e in events:
-        key = (e["ts"][:blen], e["model"], e["project"], bool(e["local"]))
+        key = (e["ts"][:blen], e["model"], e["project"], bool(e["local"]),
+               bool(e.get("sub")))
         r = agg.setdefault(key, {"i": 0, "o": 0, "c": 0, "s": 0.0})
         r["i"] += e["tin"]
         r["o"] += e["tout"]
         r["c"] += 1
         pin, pout, _src = as_of_price(e["model"], e["ts"], series)
-        r["s"] += e["tin"] / 1e6 * pin + e["tout"] / 1e6 * pout
-    rows = [{"b": b, "m": m, "p": p, "l": l, "i": r["i"], "o": r["o"],
-             "c": r["c"], "s": round(r["s"], 4)}
-            for (b, m, p, l), r in agg.items()]
+        # Cache reads (subscription transcripts) priced at 10% of input rate.
+        r["s"] += (e["tin"] / 1e6 * pin + e["tout"] / 1e6 * pout
+                   + e.get("cr", 0) / 1e6 * pin * 0.1)
+    rows = [{"b": b, "m": m, "p": p, "l": l, "u": u, "i": r["i"],
+             "o": r["o"], "c": r["c"], "s": round(r["s"], 4)}
+            for (b, m, p, l, u), r in agg.items()]
     rows.sort(key=lambda r: r["b"])
     return rows, ("daily" if blen == 10 else "hourly")
 
@@ -529,7 +635,7 @@ summary{cursor:pointer;font-size:.85rem;margin-top:14px}
  (all *.jsonl writers merged) · @@SPAN@@</div>
 <div class="filters">
  <span class="scope">
-  <button data-s="all" class="on">All</button><button data-s="local">Local only</button><button data-s="cloud">Cloud only</button>
+  <button data-s="all" class="on">All</button><button data-s="local">Local only</button><button data-s="cloud">Cloud only</button><button data-s="sub">Subscription</button>
  </span>
  <span class="note" id="scopeNote"></span>
  <div><b style="font-size:.78rem">Models</b>
@@ -560,10 +666,11 @@ summary{cursor:pointer;font-size:.85rem;margin-top:14px}
 var D; try{ D = JSON.parse(document.getElementById("d").textContent); }
 catch(e){ document.getElementById("timeline").textContent =
   "report data failed to load: " + e; return; }
-var C = {local:"#2a78d6", cloud:"#008300", ink:"#1c2733",
+var C = {local:"#2a78d6", cloud:"#008300", sub:"#e87ba4", ink:"#1c2733",
          muted:"#5b6b7b", grid:"#e3e8ee"};
 var scope = "all", sel = null;   // sel === null -> all models
 var NS = "http://www.w3.org/2000/svg";
+function cls(r){ return r.u ? "sub" : (r.l ? "local" : "cloud"); }
 
 function fmt(n){ n = Math.round(n);
   return n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
@@ -577,27 +684,27 @@ function div(id){ var d = document.getElementById(id);
   while (d.firstChild) d.removeChild(d.firstChild); return d; }
 function rows(){
   return D.rows.filter(function(r){
-    if (scope === "local" && !r.l) return false;
-    if (scope === "cloud" && r.l) return false;
+    if (scope !== "all" && cls(r) !== scope) return false;
     return !sel || sel.has(r.m); }); }
 
 function modelTotals(rs){
   var t = {};
   rs.forEach(function(r){
-    if (!t[r.m]) t[r.m] = {v:0, l:r.l};
+    if (!t[r.m]) t[r.m] = {v:0, k:cls(r)};
     t[r.m].v += r.i + r.o; });
-  return Object.keys(t).map(function(m){ return {m:m, v:t[m].v, l:t[m].l}; })
+  return Object.keys(t).map(function(m){ return {m:m, v:t[m].v, k:t[m].k}; })
     .sort(function(a,b){ return b.v - a.v; }); }
 
 function tiles(rs){
-  var calls=0, tin=0, tout=0, saved=0, spend=0;
+  var calls=0, tin=0, tout=0, saved=0, spend=0, subv=0;
   rs.forEach(function(r){ calls += r.c; tin += r.i; tout += r.o;
-    if (r.l) saved += r.s; else spend += r.s; });
+    if (r.u) subv += r.s; else if (r.l) saved += r.s; else spend += r.s; });
   var t = div("tiles");
   [["calls", calls.toLocaleString()],
    ["tokens in / out", fmt(tin) + " / " + fmt(tout)],
    ["local cost avoided*", "$" + saved.toFixed(2)],
    ["cloud est. spend*", "$" + spend.toFixed(2)],
+   ["subscription @ API rates*", "$" + subv.toFixed(2)],
    ["models shown", String(modelTotals(rs).length)]
   ].forEach(function(kv){
     var d = document.createElement("div"); d.className = "tile";
@@ -613,11 +720,11 @@ function timeline(rs){
   if (!buckets.length){ host.textContent = "no events match the current filters";
     host.className = "empty"; return; }
   host.className = "";
-  var byb = {local:{}, cloud:{}};
+  var byb = {local:{}, cloud:{}, sub:{}};
   rs.forEach(function(r){
-    var k = r.l ? "local" : "cloud";
+    var k = cls(r);
     byb[k][r.b] = (byb[k][r.b] || 0) + r.i + r.o; });
-  var names = scope === "all" ? ["local","cloud"] : [scope];
+  var names = scope === "all" ? ["local","cloud","sub"] : [scope];
   var mx = 1;
   buckets.forEach(function(b){ names.forEach(function(n){
     mx = Math.max(mx, byb[n][b] || 0); }); });
@@ -685,7 +792,7 @@ function render(){
   tiles(rs);
   timeline(rs);
   bars("modelbars", modelTotals(rs), function(p){
-    return p.l ? C.local : C.cloud; });
+    return C[p.k] || C.cloud; });
   var pt = {};
   rs.forEach(function(r){ pt[r.p] = (pt[r.p] || 0) + r.i + r.o; });
   bars("projbars", Object.keys(pt).map(function(p){
@@ -708,7 +815,7 @@ allModels.forEach(function(p){
     render(); });
   lab.appendChild(cb);
   var chip = document.createElement("span"); chip.className = "chip";
-  chip.style.background = p.l ? C.local : C.cloud;
+  chip.style.background = C[p.k] || C.cloud;
   lab.appendChild(chip);
   lab.appendChild(document.createTextNode(" " + p.m + " (" + fmt(p.v) + ")"));
   ml.appendChild(lab); });
@@ -810,6 +917,9 @@ def main(argv=None):
     p.add_argument("action", choices=["update", "list"],
                    help="update: fetch hosted rates for ledger models and "
                         "append dated entries; list: show the series")
+    p = sub.add_parser("ingest", help="import subscription-tool usage "
+                       "(flat-fee plans) into the ledger as derived events")
+    p.add_argument("tool", choices=["claude-code", "codex"])
     a = ap.parse_args(argv)
 
     if a.cmd == "serve":
@@ -844,6 +954,9 @@ def main(argv=None):
             for model, rows in sorted(load_price_series().items()):
                 for ts, pin, pout in rows:
                     print(f"{ts} {model:32s} in=${pin:<8g} out=${pout:g}")
+        return 0
+    if a.cmd == "ingest":
+        (ingest_claude_code if a.tool == "claude-code" else ingest_codex)()
         return 0
     return 1
 
