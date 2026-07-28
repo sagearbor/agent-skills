@@ -509,11 +509,19 @@ def ingest_claude_code():
                 d = json.loads(line)
                 msg = d.get("message") or {}
                 u = msg.get("usage") or {}
-                tin = (u.get("input_tokens") or 0) + \
-                      (u.get("cache_creation_input_tokens") or 0)
+                tin = u.get("input_tokens") or 0
                 tout = u.get("output_tokens") or 0
                 cr = u.get("cache_read_input_tokens") or 0
-                if not (tin or tout or cr):
+                # Cache WRITES carry a premium (5m: 1.25x, 1h: 2x input
+                # rate) — keep the TTL split the transcript provides.
+                cc = u.get("cache_creation") or {}
+                w5 = cc.get("ephemeral_5m_input_tokens") or 0
+                w1h = cc.get("ephemeral_1h_input_tokens") or 0
+                if not (w5 or w1h):
+                    # older records: flat total, priced at the cheaper 5m
+                    # premium (conservative — never overstates plan value)
+                    w5 = u.get("cache_creation_input_tokens") or 0
+                if not (tin or tout or cr or w5 or w1h):
                     continue
                 sid = d.get("uuid") or f"{f.name}:{d.get('timestamp')}"
                 if sid in existing:
@@ -527,7 +535,8 @@ def ingest_claude_code():
                     "project": Path(cwd).name if cwd else f.parent.name,
                     "model": msg.get("model") or "claude-unknown",
                     "prompt_tokens": tin, "completion_tokens": tout,
-                    "cache_read_tokens": cr, "task_tag": "claude-code"}
+                    "cache_read_tokens": cr, "cache_w5_tokens": w5,
+                    "cache_w1h_tokens": w1h, "task_tag": "claude-code"}
                 n_new += 1
             except Exception as e:
                 n_err += 1
@@ -569,7 +578,9 @@ def _all_usage_events():
              "model": e.get("model", "?"), "project": e.get("project", "?"),
              "tin": e.get("prompt_tokens") or 0,
              "tout": e.get("completion_tokens") or 0,
-             "cr": e.get("cache_read_tokens") or 0}
+             "cr": e.get("cache_read_tokens") or 0,
+             "w5": e.get("cache_w5_tokens") or 0,
+             "w1": e.get("cache_w1h_tokens") or 0}
             for e in read_ledgers(scope="all")]
 
 
@@ -594,9 +605,12 @@ def _agg_rows(events, series):
         r["o"] += e["tout"]
         r["c"] += 1
         pin, pout, _src = as_of_price(e["model"], e["ts"], series)
-        # Cache reads (subscription transcripts) priced at 10% of input rate.
+        # Anthropic-style cache economics: reads at 10% of input rate,
+        # 5-minute cache writes at 1.25x, 1-hour writes at 2x.
         r["s"] += (e["tin"] / 1e6 * pin + e["tout"] / 1e6 * pout
-                   + e.get("cr", 0) / 1e6 * pin * 0.1)
+                   + e.get("cr", 0) / 1e6 * pin * 0.1
+                   + e.get("w5", 0) / 1e6 * pin * 1.25
+                   + e.get("w1", 0) / 1e6 * pin * 2.0)
     rows = [{"b": b, "m": m, "p": p, "l": l, "u": u, "i": r["i"],
              "o": r["o"], "c": r["c"], "s": round(r["s"], 4)}
             for (b, m, p, l, u), r in agg.items()]
@@ -633,6 +647,9 @@ table{border-collapse:collapse;font-size:.8rem}
 td{border:1px solid #e3e8ee;padding:3px 8px}
 summary{cursor:pointer;font-size:.85rem;margin-top:14px}
 .empty{color:#5b6b7b;font-size:.85rem;padding:18px 0}
+#tt{position:absolute;background:#1c2733;color:#fff;padding:5px 9px;
+ border-radius:6px;font-size:.75rem;pointer-events:none;display:none;
+ z-index:9;line-height:1.5;white-space:nowrap;box-shadow:0 2px 8px #0004}
 </style></head><body>
 <h1>LLM usage ledger report</h1>
 <div class="note">generated @@GENERATED@@ · ledger dir: ~/.llm_token_ledger
@@ -692,6 +709,21 @@ function el(tag, attrs, parent, text){
   parent.appendChild(e); return e; }
 function div(id){ var d = document.getElementById(id);
   while (d.firstChild) d.removeChild(d.firstChild); return d; }
+
+var tt = document.createElement("div"); tt.id = "tt";
+document.body.appendChild(tt);
+function showTT(lines, ev){
+  while (tt.firstChild) tt.removeChild(tt.firstChild);
+  lines.forEach(function(l, i){
+    var d = document.createElement("div");
+    if (i === 0) d.style.fontWeight = "700";
+    d.textContent = l; tt.appendChild(d); });
+  tt.style.display = "block";
+  var x = ev.pageX + 14, y = ev.pageY + 12;
+  if (x + tt.offsetWidth > document.documentElement.clientWidth - 8)
+    x = ev.pageX - tt.offsetWidth - 10;
+  tt.style.left = x + "px"; tt.style.top = y + "px"; }
+function hideTT(){ tt.style.display = "none"; }
 function rows(){
   return D.rows.filter(function(r){
     if (!visible[cls(r)]) return false;
@@ -758,9 +790,26 @@ function timeline(rs){
       fill:"none", stroke:C[n], "stroke-width":2}, svg);
     pts.forEach(function(p, i){
       var v = byb[n][buckets[i]] || 0; if (!v) return;
-      var c = el("circle", {cx:p[0].toFixed(0), cy:p[1].toFixed(0), r:4,
-                            fill:C[n]}, svg);
-      el("title", {}, c, buckets[i] + " " + n + ": " + fmtV(v)); }); });
+      el("circle", {cx:p[0].toFixed(0), cy:p[1].toFixed(0), r:4,
+                    fill:C[n]}, svg); }); });
+  // crosshair + hover bands: one transparent strip per bucket showing
+  // every visible series' value at once
+  var xhair = el("line", {y1:8, y2:8+ih, stroke:C.muted,
+                          "stroke-width":1, "stroke-dasharray":"3,3",
+                          visibility:"hidden"}, svg);
+  buckets.forEach(function(b, i){
+    var cx = pad + iw * (buckets.length < 2 ? 0.5 : i/(buckets.length-1));
+    var half = iw / Math.max(buckets.length-1, 1) / 2;
+    var band = el("rect", {x:(cx-half).toFixed(0), y:8,
+                           width:(2*half).toFixed(0), height:ih,
+                           fill:"transparent"}, svg);
+    band.addEventListener("mousemove", function(ev){
+      xhair.setAttribute("x1", cx); xhair.setAttribute("x2", cx);
+      xhair.setAttribute("visibility", "visible");
+      showTT([b].concat(names.map(function(n){
+        return n + ": " + fmtV(byb[n][b] || 0); })), ev); });
+    band.addEventListener("mouseleave", function(){
+      xhair.setAttribute("visibility", "hidden"); hideTT(); }); });
   el("text", {x:pad, y:h-6, "font-size":10, fill:C.muted}, svg, buckets[0]);
   el("text", {x:w-8, y:h-6, "text-anchor":"end", "font-size":10,
               fill:C.muted}, svg, buckets[buckets.length-1]);
@@ -787,11 +836,16 @@ function bars(hostId, pairs, colorOf){
     var bw = Math.max(3, (w - 300) * p.v / mx);
     el("text", {x:215, y:y+bh-6, "text-anchor":"end", "font-size":12,
                 fill:C.ink}, svg, p.m.length > 32 ? p.m.slice(0,31)+"…" : p.m);
+    // full-row transparent hit strip so hovering anywhere on the row works
+    var hit = el("rect", {x:0, y:y, width:w, height:bh-2,
+                          fill:"transparent"}, svg);
     var r = el("rect", {x:222, y:y, width:bw.toFixed(0), height:bh-4, rx:2,
-                        fill:colorOf(p)}, svg);
-    el("title", {}, r, p.m + ": " + fmtV(p.v));
+                        fill:colorOf(p), "pointer-events":"none"}, svg);
+    hit.addEventListener("mousemove", function(ev){
+      showTT([p.m, fmtV(p.v)], ev); });
+    hit.addEventListener("mouseleave", hideTT);
     el("text", {x:(226+bw).toFixed(0), y:y+bh-6, "font-size":12,
-                fill:C.muted}, svg, fmtV(p.v)); });
+                fill:C.muted, "pointer-events":"none"}, svg, fmtV(p.v)); });
   if (pairs.length > shown.length){
     var n = document.createElement("div"); n.className = "note";
     n.textContent = "(+" + (pairs.length - shown.length) + " more in the table)";

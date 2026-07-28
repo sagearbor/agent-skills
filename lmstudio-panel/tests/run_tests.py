@@ -184,7 +184,8 @@ def run_suite():
         if len(derived) == 1:
             recs = [json.loads(l) for l in
                     derived[0].read_text().splitlines()]
-            ok = (len(recs) == 1 and recs[0]["prompt_tokens"] == 100
+            ok = (len(recs) == 1 and recs[0]["prompt_tokens"] == 10
+                  and recs[0]["cache_w5_tokens"] == 90
                   and recs[0]["cache_read_tokens"] == 1000
                   and recs[0]["subscription"] is True
                   and recs[0]["project"] == "repo")
@@ -199,8 +200,9 @@ def run_suite():
         sub = [e for e in ev if e["sub"]]
         rows2, _g = lp._agg_rows(ev, lp.load_price_series())
         subrow = [r for r in rows2 if r["u"]]
-        # 100 in @$3 + 20 out @$15 + 1000 cache @$0.3 => 0.0003+0.0003+0.0003
-        expect = 100/1e6*3.0 + 20/1e6*15.0 + 1000/1e6*0.3
+        # 10 in @$3 + 20 out @$15 + 1000 reads @10% + 90 5m-writes @1.25x
+        expect = (10/1e6*3.0 + 20/1e6*15.0 + 1000/1e6*0.3
+                  + 90/1e6*3.0*1.25)
         check("subscription_agg_and_cache_price",
               len(sub) == 1 and len(subrow) == 1
               and abs(subrow[0]["s"] - round(expect, 4)) < 1e-6,
