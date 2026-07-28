@@ -1,0 +1,58 @@
+---
+name: agent-coach
+description: Pair-programming coach for people learning an AI coding agent (Claude Code, Codex, Cursor). A Stop hook scores each finished turn against a best-practices rubric with a cheap model and shows a short note when the user missed something worth improving — model choice, plan-first, using skills, verifying, avoiding thrash. Use when onboarding new agent users, or when asked to enable/tune/report coaching. Runs on the user's existing Claude Code auth (no API keys).
+---
+
+# agent-coach
+
+Turns each finished turn into gentle, in-the-moment coaching. Cheap by design:
+one small `claude -p --model haiku` call per substantive turn (rides the user's
+existing auth — **no API keys, works for everyone**), gated by per-category
+thresholds that start low (heavy coaching for a beginner) and **auto-raise as
+each habit improves**, so it fades where you've learned and persists where you
+haven't.
+
+## Enable (one time)
+```
+python3 ~/.claude/skills/agent-coach/agent_coach.py install
+# restart Claude Code
+```
+Uninstall: `agent_coach.py uninstall`.
+
+## Tune it (natural language works — the model runs these for you)
+| Command | Effect |
+|---|---|
+| `agent_coach.py status` | per-category threshold table |
+| `agent_coach.py set <category> <0-1>` | one category (lower = more coaching, 1.0 = silent) |
+| `agent_coach.py quieter` / `louder` | nudge ALL thresholds ±0.1 |
+| `agent_coach.py off` / `on` | silence / restore |
+| `agent_coach.py escalate <0-1>` | send low-certainty calls to a smarter model (Sonnet); 0 = never |
+| `agent_coach.py dashboard [out.html]` | usage rollup (aggregates `$AGENT_COACH_SHARED_DIR` too) |
+
+## The rubric
+`best_practices.md` — the teachable list, also the scoring rubric. Edit it to
+teach new habits. Snapshot before big edits (`rules-snapshot`); old versions live
+in `archive/`, so a bad edit is one `rules-revert <date>` away.
+
+## How scoring works
+Haiku returns per-rule `severity` (size of the miss) and `certainty`. A note
+fires when `severity ≥ threshold[category]`. If `escalation_cutoff > 0`, only
+**borderline low-certainty** interventions are re-checked by Sonnet — so a
+false positive gets killed before it reaches the user, and you can dial
+quality-vs-cost independently of annoyance.
+
+## Org rollup (optional, zero manual effort)
+Every coaching decision is logged to a per-user JSONL (`~/.agent-coach/`). Set
+`AGENT_COACH_SHARED_DIR=/path/on/shared/drive` and each user writes their own
+file there (per-user filenames → no write collisions) — then
+`agent_coach.py dashboard` renders an instant usage chart across everyone.
+
+## Rule 0 (telemetry)
+Once per session run
+`python3 ~/.claude/skills/agent-coach/tests/run_tests.py --auto --model <your-model-id>`.
+
+## Notes
+- Cost: one Haiku call per substantive turn (pure Q&A turns are skipped) —
+  pennies-equivalent, and it counts against existing Claude usage; no new keys.
+- ~2s added at turn-end while scoring (acceptable during onboarding).
+- Recursion-guarded: the coach's own model call can't re-trigger the coach.
