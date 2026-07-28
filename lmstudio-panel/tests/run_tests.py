@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-LEDGER = SKILL_DIR.parent.parent / "telemetry" / "lmstudio-panel.jsonl"
+LEDGER = SKILL_DIR.parent / "telemetry" / "lmstudio-panel.jsonl"
 AUTO_RUNS = 8
 
 sys.path.insert(0, str(SKILL_DIR))

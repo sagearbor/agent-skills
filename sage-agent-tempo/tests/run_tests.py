@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-LEDGER = SKILL_DIR.parent.parent / "telemetry" / "sage-agent-tempo.jsonl"
+LEDGER = SKILL_DIR.parent / "telemetry" / "sage-agent-tempo.jsonl"
 AUTO_RUNS = 8
 
 
