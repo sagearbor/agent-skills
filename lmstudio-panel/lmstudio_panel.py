@@ -634,16 +634,15 @@ summary{cursor:pointer;font-size:.85rem;margin-top:14px}
 <div class="note">generated @@GENERATED@@ · ledger dir: ~/.llm_token_ledger
  (all *.jsonl writers merged) · @@SPAN@@</div>
 <div class="filters">
- <span class="scope">
-  <button data-s="all" class="on">All</button><button data-s="local">Local only</button><button data-s="cloud">Cloud only</button><button data-s="sub">Subscription</button>
- </span>
- <span class="note" id="scopeNote"></span>
- <div><b style="font-size:.78rem">Models</b>
-  <button class="mini" id="mAll">all</button><button class="mini" id="mNone">none</button>
-  <div id="mlist"></div></div>
+ <span class="scope" id="clsChips"><button data-c="local">Local</button><button data-c="cloud">Cloud</button><button data-c="sub">Subscription</button></span>
+ &nbsp;·&nbsp;
+ <span class="scope" id="metricChips"><button data-m="usd" class="on">$</button><button data-m="tok">tokens</button></span>
+ <details><summary>Models (<span id="mCount"></span> shown)
+  <button class="mini" id="mAll">all</button><button class="mini" id="mNone">none</button></summary>
+  <div id="mlist"></div></details>
 </div>
 <div class="tiles" id="tiles"></div>
-<h2>Tokens over time (<span id="gran"></span>)
+<h2><span id="metricWord">$</span> over time (<span id="gran"></span>)
  <span id="legend"></span></h2>
 <div id="timeline"></div>
 <h2>Models by tokens <span class="note">(within current filters)</span></h2>
@@ -668,13 +667,20 @@ catch(e){ document.getElementById("timeline").textContent =
   "report data failed to load: " + e; return; }
 var C = {local:"#2a78d6", cloud:"#008300", sub:"#e87ba4", ink:"#1c2733",
          muted:"#5b6b7b", grid:"#e3e8ee"};
-var scope = "all", sel = null;   // sel === null -> all models
+var visible = {local:true, cloud:true, sub:true};
+var metric = "usd", sel = null;   // sel === null -> all models
 var NS = "http://www.w3.org/2000/svg";
 function cls(r){ return r.u ? "sub" : (r.l ? "local" : "cloud"); }
+function val(r){ return metric === "usd" ? r.s : r.i + r.o; }
 
 function fmt(n){ n = Math.round(n);
   return n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
        : n >= 1e3 ? (n/1e3).toFixed(0)+"k" : String(n); }
+function fmtV(n){
+  if (metric !== "usd") return fmt(n);
+  return n >= 1000 ? "$" + (n/1000).toFixed(1) + "k"
+       : n >= 100 ? "$" + n.toFixed(0)
+       : n >= 1 ? "$" + n.toFixed(2) : "$" + n.toFixed(3); }
 function el(tag, attrs, parent, text){
   var e = document.createElementNS(NS, tag);
   for (var k in attrs) e.setAttribute(k, attrs[k]);
@@ -684,14 +690,14 @@ function div(id){ var d = document.getElementById(id);
   while (d.firstChild) d.removeChild(d.firstChild); return d; }
 function rows(){
   return D.rows.filter(function(r){
-    if (scope !== "all" && cls(r) !== scope) return false;
+    if (!visible[cls(r)]) return false;
     return !sel || sel.has(r.m); }); }
 
 function modelTotals(rs){
   var t = {};
   rs.forEach(function(r){
     if (!t[r.m]) t[r.m] = {v:0, k:cls(r)};
-    t[r.m].v += r.i + r.o; });
+    t[r.m].v += val(r); });
   return Object.keys(t).map(function(m){ return {m:m, v:t[m].v, k:t[m].k}; })
     .sort(function(a,b){ return b.v - a.v; }); }
 
@@ -723,12 +729,13 @@ function timeline(rs){
   var byb = {local:{}, cloud:{}, sub:{}};
   rs.forEach(function(r){
     var k = cls(r);
-    byb[k][r.b] = (byb[k][r.b] || 0) + r.i + r.o; });
-  var names = scope === "all" ? ["local","cloud","sub"] : [scope];
-  var mx = 1;
+    byb[k][r.b] = (byb[k][r.b] || 0) + val(r); });
+  var names = ["local","cloud","sub"].filter(function(n){
+    return visible[n]; });
+  var mx = metric === "usd" ? 0.01 : 1;
   buckets.forEach(function(b){ names.forEach(function(n){
     mx = Math.max(mx, byb[n][b] || 0); }); });
-  var pad = 10 + fmt(mx).length * 7.5;
+  var pad = 10 + fmtV(mx).length * 7.5;
   var w = 720, h = 190, iw = w - pad - 40, ih = h - 42;
   var svg = el("svg", {viewBox: "0 0 " + w + " " + h, role: "img",
                        "font-family": "sans-serif"}, host);
@@ -737,7 +744,7 @@ function timeline(rs){
     el("line", {x1:pad, y1:y, x2:w-8, y2:y, stroke:C.grid,
                 "stroke-width":1}, svg);
     el("text", {x:pad-5, y:y+4, "text-anchor":"end", "font-size":10,
-                fill:C.muted}, svg, fmt(mx*f)); });
+                fill:C.muted}, svg, fmtV(mx*f)); });
   names.forEach(function(n){
     var pts = buckets.map(function(b, i){
       return [pad + iw * (buckets.length < 2 ? 0.5 : i/(buckets.length-1)),
@@ -749,8 +756,7 @@ function timeline(rs){
       var v = byb[n][buckets[i]] || 0; if (!v) return;
       var c = el("circle", {cx:p[0].toFixed(0), cy:p[1].toFixed(0), r:4,
                             fill:C[n]}, svg);
-      el("title", {}, c, buckets[i] + " " + n + ": " + v.toLocaleString()
-                        + " tokens"); }); });
+      el("title", {}, c, buckets[i] + " " + n + ": " + fmtV(v)); }); });
   el("text", {x:pad, y:h-6, "font-size":10, fill:C.muted}, svg, buckets[0]);
   el("text", {x:w-8, y:h-6, "text-anchor":"end", "font-size":10,
               fill:C.muted}, svg, buckets[buckets.length-1]);
@@ -779,27 +785,39 @@ function bars(hostId, pairs, colorOf){
                 fill:C.ink}, svg, p.m.length > 32 ? p.m.slice(0,31)+"…" : p.m);
     var r = el("rect", {x:222, y:y, width:bw.toFixed(0), height:bh-4, rx:2,
                         fill:colorOf(p)}, svg);
-    el("title", {}, r, p.m + ": " + p.v.toLocaleString() + " tokens");
+    el("title", {}, r, p.m + ": " + fmtV(p.v));
     el("text", {x:(226+bw).toFixed(0), y:y+bh-6, "font-size":12,
-                fill:C.muted}, svg, fmt(p.v)); });
+                fill:C.muted}, svg, fmtV(p.v)); });
   if (pairs.length > shown.length){
     var n = document.createElement("div"); n.className = "note";
     n.textContent = "(+" + (pairs.length - shown.length) + " more in the table)";
     host.appendChild(n); } }
 
+function refreshChips(){
+  document.querySelectorAll("#clsChips button").forEach(function(b){
+    var c = b.getAttribute("data-c"), on = visible[c];
+    b.className = on ? "on" : "";
+    b.style.background = on ? C[c] : "";
+    b.style.borderColor = on ? C[c] : ""; });
+  document.querySelectorAll("#metricChips button").forEach(function(b){
+    b.className = b.getAttribute("data-m") ===
+      (metric === "usd" ? "usd" : "tok") ? "on" : ""; }); }
+
 function render(){
+  refreshChips();
+  document.getElementById("metricWord").textContent =
+    metric === "usd" ? "$" : "Tokens";
   var rs = rows();
   tiles(rs);
   timeline(rs);
-  bars("modelbars", modelTotals(rs), function(p){
-    return C[p.k] || C.cloud; });
+  var mt = modelTotals(rs);
+  document.getElementById("mCount").textContent = String(mt.length);
+  bars("modelbars", mt, function(p){ return C[p.k] || C.cloud; });
   var pt = {};
-  rs.forEach(function(r){ pt[r.p] = (pt[r.p] || 0) + r.i + r.o; });
+  rs.forEach(function(r){ pt[r.p] = (pt[r.p] || 0) + val(r); });
   bars("projbars", Object.keys(pt).map(function(p){
       return {m:p, v:pt[p]}; }).sort(function(a,b){ return b.v-a.v; }),
-    function(){ return scope === "cloud" ? C.cloud : C.local; });
-  document.getElementById("scopeNote").textContent =
-    scope === "all" ? "" : "axes rescale to the " + scope + " view"; }
+    function(){ return C.ink; }); }
 
 document.getElementById("gran").textContent = D.granularity;
 var allModels = modelTotals(D.rows);
@@ -817,20 +835,25 @@ allModels.forEach(function(p){
   var chip = document.createElement("span"); chip.className = "chip";
   chip.style.background = C[p.k] || C.cloud;
   lab.appendChild(chip);
-  lab.appendChild(document.createTextNode(" " + p.m + " (" + fmt(p.v) + ")"));
+  lab.appendChild(document.createTextNode(" " + p.m + " (" + fmtV(p.v) + ")"));
   ml.appendChild(lab); });
 function setAll(state){
   ml.querySelectorAll("input").forEach(function(b){ b.checked = state; });
   sel = state ? null : new Set(); render(); }
 document.getElementById("mAll").addEventListener("click",
-  function(){ setAll(true); });
+  function(e){ e.preventDefault(); setAll(true); });
 document.getElementById("mNone").addEventListener("click",
-  function(){ setAll(false); });
-document.querySelectorAll(".scope button").forEach(function(b){
+  function(e){ e.preventDefault(); setAll(false); });
+document.querySelectorAll("#clsChips button").forEach(function(b){
   b.addEventListener("click", function(){
-    scope = b.getAttribute("data-s");
-    document.querySelectorAll(".scope button").forEach(function(x){
-      x.className = x === b ? "on" : ""; });
+    var c = b.getAttribute("data-c");
+    visible[c] = !visible[c];
+    if (!visible.local && !visible.cloud && !visible.sub)
+      visible[c] = true;   // never allow an all-off dead end
+    render(); }); });
+document.querySelectorAll("#metricChips button").forEach(function(b){
+  b.addEventListener("click", function(){
+    metric = b.getAttribute("data-m") === "usd" ? "usd" : "tok";
     render(); }); });
 render();
 })();

@@ -154,8 +154,9 @@ def run_suite():
         check("html_report_renders",
               'type="application/json"' in html
               and "another-repo" in html          # data island has the project
-              and 'data-s="local"' in html        # scope chips
-              and 'id="mlist"' in html            # model filter
+              and 'data-c="local"' in html        # class toggle chips
+              and 'data-m="usd"' in html          # $/tokens metric toggle
+              and 'id="mlist"' in html            # collapsible model filter
               and "<table>" in html,              # JS-independent fallback
               "missing data island / filters / table")
 
