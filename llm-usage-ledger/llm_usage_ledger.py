@@ -491,6 +491,7 @@ def _all_usage_events():
     return [{"ts": e["ts"], "local": is_local_event(e),
              "sub": bool(e.get("subscription")),
              "model": e.get("model", "?"), "project": e.get("project", "?"),
+             "machine": e.get("machine", "?"),
              "tin": e.get("prompt_tokens") or 0,
              "tout": e.get("completion_tokens") or 0,
              "cr": e.get("cache_read_tokens") or 0,
@@ -514,7 +515,7 @@ def _agg_rows(events, series):
     agg = {}
     for e in events:
         key = (e["ts"][:blen], e["model"], e["project"], bool(e["local"]),
-               bool(e.get("sub")))
+               bool(e.get("sub")), e.get("machine", "?"))
         r = agg.setdefault(key, {"i": 0, "o": 0, "c": 0, "s": 0.0})
         r["i"] += e["tin"]
         r["o"] += e["tout"]
@@ -526,9 +527,9 @@ def _agg_rows(events, series):
                    + e.get("cr", 0) / 1e6 * pin * 0.1
                    + e.get("w5", 0) / 1e6 * pin * 1.25
                    + e.get("w1", 0) / 1e6 * pin * 2.0)
-    rows = [{"b": b, "m": m, "p": p, "l": l, "u": u, "i": r["i"],
+    rows = [{"b": b, "m": m, "p": p, "l": l, "u": u, "M": M, "i": r["i"],
              "o": r["o"], "c": r["c"], "s": round(r["s"], 4)}
-            for (b, m, p, l, u), r in agg.items()]
+            for (b, m, p, l, u, M), r in agg.items()]
     rows.sort(key=lambda r: r["b"])
     return rows, ("daily" if blen == 10 else "hourly")
 
@@ -573,6 +574,8 @@ summary{cursor:pointer;font-size:.85rem;margin-top:14px}
  <span class="scope" id="clsChips"><button data-c="local">Local</button><button data-c="cloud">Cloud</button><button data-c="sub">Subscription</button></span>
  &nbsp;·&nbsp;
  <span class="scope" id="metricChips"><button data-m="usd" class="on">$</button><button data-m="tok">tokens</button></span>
+ &nbsp;·&nbsp;
+ <span class="scope" id="machChips"></span>
  <details><summary>Models (<span id="mCount"></span> shown)
   <button class="mini" id="mAll">all</button><button class="mini" id="mNone">none</button></summary>
   <div id="mlist"></div></details>
@@ -604,6 +607,7 @@ catch(e){ document.getElementById("timeline").textContent =
 var C = {local:"#2a78d6", cloud:"#008300", sub:"#e87ba4", ink:"#1c2733",
          muted:"#5b6b7b", grid:"#e3e8ee"};
 var visible = {local:true, cloud:true, sub:true};
+var machOn = null;   // null until built; map machine -> bool
 var metric = "usd", sel = null;   // sel === null -> all models
 var NS = "http://www.w3.org/2000/svg";
 function cls(r){ return r.u ? "sub" : (r.l ? "local" : "cloud"); }
@@ -642,6 +646,7 @@ function hideTT(){ tt.style.display = "none"; }
 function rows(){
   return D.rows.filter(function(r){
     if (!visible[cls(r)]) return false;
+    if (machOn && machOn[r.M] === false) return false;
     return !sel || sel.has(r.m); }); }
 
 function modelTotals(rs){
@@ -793,6 +798,23 @@ function render(){
     function(){ return C.ink; }); }
 
 document.getElementById("gran").textContent = D.granularity;
+(function(){
+  var ms = {};
+  D.rows.forEach(function(r){ ms[r.M || "?"] = true; });
+  var names = Object.keys(ms).sort();
+  if (names.length > 1){
+    machOn = {}; names.forEach(function(n){ machOn[n] = true; });
+    var host = document.getElementById("machChips");
+    names.forEach(function(n){
+      var b = document.createElement("button");
+      b.textContent = n; b.className = "on";
+      b.addEventListener("click", function(){
+        machOn[n] = !machOn[n];
+        if (names.every(function(x){ return !machOn[x]; })) machOn[n] = true;
+        b.className = machOn[n] ? "on" : "";
+        render(); });
+      host.appendChild(b); }); }
+})();
 var allModels = modelTotals(D.rows);
 var ml = document.getElementById("mlist");
 allModels.forEach(function(p){
