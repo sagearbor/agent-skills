@@ -692,7 +692,7 @@ function timeline(rs){
   buckets.forEach(function(b){ names.forEach(function(n){
     mx = Math.max(mx, byb[n][b] || 0); }); });
   var pad = 10 + fmtV(mx).length * 7.5;
-  var w = 720, h = 190, iw = w - pad - 40, ih = h - 42;
+  var w = 720, h = 200, iw = w - pad - 40, ih = h - 52;
   var svg = el("svg", {viewBox: "0 0 " + w + " " + h, role: "img",
                        "font-family": "sans-serif"}, host);
   [0, 0.5, 1].forEach(function(f){
@@ -730,9 +730,20 @@ function timeline(rs){
         return n + ": " + fmtV(byb[n][b] || 0); })), ev); });
     band.addEventListener("mouseleave", function(){
       xhair.setAttribute("visibility", "hidden"); hideTT(); }); });
-  el("text", {x:pad, y:h-6, "font-size":10, fill:C.muted}, svg, buckets[0]);
-  el("text", {x:w-8, y:h-6, "text-anchor":"end", "font-size":10,
-              fill:C.muted}, svg, buckets[buckets.length-1]);
+  // date ticks: up to 6 evenly spaced, two-line "MM-DD / YYYY" labels
+  var nt = Math.min(6, buckets.length);
+  for (var ti = 0; ti < nt; ti++){
+    var bi = nt < 2 ? 0 : Math.round(ti * (buckets.length - 1) / (nt - 1));
+    var tx = pad + iw * (buckets.length < 2 ? 0.5 : bi/(buckets.length-1));
+    var anchor = ti === 0 ? "start" : (ti === nt-1 ? "end" : "middle");
+    var day = buckets[bi], yr = "";
+    var mm = day.match(/^(\d{4})-(\d{2}-\d{2})(T(\d{2}))?/);
+    if (mm){ yr = mm[1]; day = mm[2] + (mm[4] ? " " + mm[4] + "h" : ""); }
+    el("text", {x:tx.toFixed(0), y:h-16, "text-anchor":anchor,
+                "font-size":10, fill:C.muted}, svg, day);
+    el("text", {x:tx.toFixed(0), y:h-4, "text-anchor":anchor,
+                "font-size":9, fill:C.muted}, svg, yr);
+  }
   var lg = document.getElementById("legend");
   while (lg.firstChild) lg.removeChild(lg.firstChild);
   names.forEach(function(n){
