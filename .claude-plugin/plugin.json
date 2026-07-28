@@ -1,0 +1,9 @@
+{
+  "name": "sage-skills",
+  "version": "1.0.0",
+  "description": "Self-authored Claude Code skills with versioned regression tests and a passive model-telemetry matrix: md-convert (markdown to docx/html/pdf/xlsx with Word-native TOC), lmstudio-panel (local LM Studio control + cross-repo token ledger + usage dashboards), meeting-canvas (interactive planning worksheets), sage-agent-tempo (agent work tracking), pub-readiness-check (publication readiness audit).",
+  "author": {
+    "name": "sagearbor"
+  },
+  "repository": "https://github.com/sagearbor/agent-skills"
+}
