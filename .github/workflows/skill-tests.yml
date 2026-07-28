@@ -1,0 +1,20 @@
+name: skill-tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        skill: [md-convert, meeting-canvas, sage-agent-tempo, lmstudio-panel]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      # Deterministic fixture suites only — no models, no network, no ledger
+      # persistence (CI telemetry rows are ephemeral by design; the real
+      # model-matrix fills from actual usage, not CI).
+      - run: python3 ${{ matrix.skill }}/tests/run_tests.py --model github-ci
