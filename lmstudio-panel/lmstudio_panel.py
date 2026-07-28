@@ -72,7 +72,11 @@ def whoami() -> str:
 
 
 def machine_name() -> str:
-    return platform.node().split(".")[0] or "unknown"
+    # Override for environments that share a hostname (e.g. WSL reports the
+    # Windows hostname): set LLM_LEDGER_MACHINE=pc-wsl etc. so per-machine
+    # ledger filenames never collide in a shared ledger dir.
+    return (os.environ.get("LLM_LEDGER_MACHINE")
+            or platform.node().split(".")[0] or "unknown")
 
 
 def detect_project(cwd: str = ".") -> str:
