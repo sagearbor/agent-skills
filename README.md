@@ -1,5 +1,7 @@
 # Global skills (~/.claude/skills)
 
+[![skill-tests](https://github.com/sagearbor/agent-skills/actions/workflows/skill-tests.yml/badge.svg)](https://github.com/sagearbor/agent-skills/actions/workflows/skill-tests.yml) · [**live regression matrix**](telemetry/matrix.md)
+
 Version-controlled since 2026-07-25 so skill edits across model generations
 are tracked (git log answers "what changed when model X landed").
 

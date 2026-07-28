@@ -18,3 +18,20 @@ jobs:
       # persistence (CI telemetry rows are ephemeral by design; the real
       # model-matrix fills from actual usage, not CI).
       - run: python3 ${{ matrix.skill }}/tests/run_tests.py --model github-ci
+
+  render-matrix:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 telemetry/render_matrix.py
+      - name: commit refreshed matrix if changed
+        run: |
+          git config user.name "matrix-bot"
+          git config user.email "actions@github.com"
+          git add telemetry/matrix.md telemetry/matrix.svg
+          git diff --cached --quiet || git commit -m "chore: refresh telemetry matrix [skip ci]"
+          git push
