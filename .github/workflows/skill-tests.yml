@@ -14,6 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
+      - run: sudo apt-get update -q && sudo apt-get install -y -q pandoc
       # Deterministic fixture suites only — no models, no network, no ledger
       # persistence (CI telemetry rows are ephemeral by design; the real
       # model-matrix fills from actual usage, not CI).

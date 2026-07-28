@@ -41,8 +41,12 @@ def run_suite():
     check("declared_hook_resolves", hook.is_file(),
           "SKILL.md Stop hook target missing (the old-machine bug)")
     check("hook_executable", hook.is_file() and hook.stat().st_mode & 0o111 != 0)
-    check("cli_on_path", shutil.which("sage-agent-tempo") is not None,
-          "npm link from the sage-agent-tempo repo")
+    import os as _os
+    if _os.getenv("CI") and shutil.which("sage-agent-tempo") is None:
+        r["cli_on_path"] = "skip (CI: npm link is a per-machine install step)"
+    else:
+        check("cli_on_path", shutil.which("sage-agent-tempo") is not None,
+              "npm link from the sage-agent-tempo repo")
     if hook.is_file():
         p = subprocess.run(["bash", str(hook)], input=b"{}",
                            capture_output=True, timeout=20)
