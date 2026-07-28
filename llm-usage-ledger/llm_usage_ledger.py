@@ -737,7 +737,7 @@ function timeline(rs){
     var tx = pad + iw * (buckets.length < 2 ? 0.5 : bi/(buckets.length-1));
     var anchor = ti === 0 ? "start" : (ti === nt-1 ? "end" : "middle");
     var day = buckets[bi], yr = "";
-    var mm = day.match(/^(\d{4})-(\d{2}-\d{2})(T(\d{2}))?/);
+    var mm = day.match(/^([0-9]{4})-([0-9]{2}-[0-9]{2})(T([0-9]{2}))?/);
     if (mm){ yr = mm[1]; day = mm[2] + (mm[4] ? " " + mm[4] + "h" : ""); }
     el("text", {x:tx.toFixed(0), y:h-16, "text-anchor":anchor,
                 "font-size":10, fill:C.muted}, svg, day);
