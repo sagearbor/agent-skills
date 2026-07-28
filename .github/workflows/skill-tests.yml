@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        skill: [md-convert, meeting-canvas, sage-agent-tempo, lmstudio-panel]
+        skill: [md-convert, meeting-canvas, sage-agent-tempo, lmstudio-panel, llm-usage-ledger]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

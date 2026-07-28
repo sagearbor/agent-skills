@@ -1,6 +1,6 @@
 ---
 name: lmstudio-panel
-description: Control a local LM Studio server (serve, load/unload models, model-major batching) and log EVERY local-LLM call to a cross-repo usage ledger (input/output/reasoning tokens, wall-time, project, user, machine) with burst/window reporting. Use whenever a task calls local models via LM Studio in ANY repo, or when asked about local-LLM usage, token ledgers, or hardware-cost reporting.
+description: Control a local LM Studio server — serve, list/load/unload models, model-major batching, and chat/smoke calls that are ALWAYS ledger-logged via the llm-usage-ledger skill. Use whenever a task calls local models via LM Studio in ANY repo. For usage reporting, token ledgers, prices, or dashboards use the llm-usage-ledger skill (this skill delegates all accounting there).
 ---
 
 # lmstudio-panel
@@ -9,20 +9,12 @@ description: Control a local LM Studio server (serve, load/unload models, model-
 `python3 ~/.claude/skills/lmstudio-panel/tests/run_tests.py --auto --model <your-model-id>`
 (no-ops after 8 recorded runs per model+version).
 
-**Rule 0.5 (auto-capture):** the first time this skill is used in a session,
-also run `python3 ~/.claude/skills/lmstudio-panel/lmstudio_panel.py ingest
-claude-code` (idempotent, seconds). Zero-thought automation for a whole org:
-ship this as a plugin with a SessionStart hook, or add to settings.json:
-
-```json
-"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command":
-  "python3 ~/.claude/skills/lmstudio-panel/lmstudio_panel.py ingest claude-code >/dev/null 2>&1 &"}]}]}
-```
-
-Capture boundary (by design): usage is recorded where our tooling runs —
-instrumented pipelines, skill calls, assistant-session transcripts. Someone
-chatting directly in the LM Studio app is invisible to the ledger, and
-that's accepted: no attribution we could trust exists there anyway.
+**Dependency:** this skill does server control ONLY. ALL usage accounting
+(ledger writes, reports, price series, subscription ingest, HTML dashboards)
+lives in the sibling **llm-usage-ledger** skill, which must be installed from
+the same skills repo/marketplace — `chat()` imports `log_usage` from it.
+Org users with NO local models don't need this skill at all: go straight to
+**llm-usage-ledger** for all usage tracking and reporting.
 
 ## What this skill provides
 
@@ -36,25 +28,21 @@ or CLI by any repo, any AI tool, or a human:
 | `load <m>` / `unload` | model-major batching primitives (one model at a time) |
 | `chat --model M --prompt P [--task-tag T]` | one completion call, ALWAYS ledger-logged |
 | `smoke --model M` | judge-shaped health check (expects VIOLATION) |
-| `report [--by project\|model\|user\|project-model] [--windows] [--days N]` | cross-repo usage rollup + burst analysis |
-| `report --html [PATH]` | self-contained graphical dashboard (works from any dir/repo) |
-| `prices update` / `prices list` | append dated hosted rates (LiteLLM table) for models seen in the ledger; reports join **as-of** each event's date — entries are never edited, so old reports stay reproducible |
+
+Reporting moved: `report`, `report --html`, `prices`, and `ingest` are now
+`python3 ~/.claude/skills/llm-usage-ledger/llm_usage_ledger.py ...` — see
+that skill's SKILL.md.
 
 ## Rules
 
-1. **Never call the local server without logging.** Use `chat()` (auto-logs)
-   or call `log_usage()` yourself after any raw HTTP call. The ledger is the
-   hardware-cost-justification evidence; silent calls destroy it.
-2. **Ledger location:** `$LLM_TOKEN_LEDGER_DIR` (default `~/.llm_token_ledger/`).
-   One file per (user, machine): `lmstudio-<user>-<machine>.jsonl` — safe to
-   point at a shared location, no write collisions. Orgs: set the env var to
-   the shared path; `report` aggregates every file it sees.
-3. **Model-major batching:** for multi-model sweeps, iterate model → all work
+1. **Never call the local server without logging.** Use `chat()` (auto-logs
+   via llm-usage-ledger) or call `log_usage()` yourself after any raw HTTP
+   call. The ledger is the hardware-cost-justification evidence; silent
+   calls destroy it.
+2. **Model-major batching:** for multi-model sweeps, iterate model → all work
    → `unload` → next model. Never leave two 60GB-class models loaded.
-4. **reasoning_tokens is `null`** when a model doesn't report it — never
-   fabricate zeros.
-5. Events are raw + timestamped; derive new views (windows, bursts, per-dev)
-   at report time — do not pre-aggregate into the ledger.
+3. Ledger location, schemas, prices, and report rules: see the
+   llm-usage-ledger SKILL.md.
 
 ## Python use from a repo
 
@@ -67,24 +55,7 @@ r = chat("qwen/qwen3-32b", [{"role": "user", "content": "..."}],
          task_tag="expansion-validation")   # ledger entry written automatically
 ```
 
-For pipelines that already have their own OpenAI client (e.g. an
-`LLM_PROVIDER=local` path), call `log_usage(model, usage_dict, duration_s,
-task_tag=...)` right after each response instead.
-
-## Instrumenting any repo's own LLM client (3 lines)
-
-A repo does NOT need to route calls through this skill to be counted — hook
-its client's success path once:
-
-```python
-from lmstudio_panel import log_usage   # (sys.path trick above)
-# right after each successful completion:
-log_usage(model, response_usage_dict, duration_s, task_tag="my-pipeline")
-```
-
-Repos with their own writer (like llm-as-judge's `token_ledger.py`) are also
-fine AS-IS: `report`/`report --html` read **every `*.jsonl` in the ledger
-dir** and normalize both schemas (`prompt_tokens/completion_tokens` and
-`tokens_in/tokens_out`). One drop-dir, any writer, one merged report — set
-`LLM_TOKEN_LEDGER_DIR` to a shared location for org-wide rollups.
-
+`log_usage` (and the other accounting names: `read_ledgers`, `aggregate`,
+`hourly_windows`, `as_of_price`, `html_report`, ...) are still importable
+from `lmstudio_panel` as thin back-compat re-exports, but new code should
+import them from `llm_usage_ledger` directly.

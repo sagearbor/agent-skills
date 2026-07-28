@@ -10,14 +10,14 @@
     {
       "name": "sage-skills",
       "source": "./",
-      "description": "Five self-authored skills, each shipping VERSION + deterministic fixture tests (run_tests.py) + passive per-model telemetry: md-convert, lmstudio-panel, meeting-canvas, sage-agent-tempo, pub-readiness-check. Convention documented in README.md.",
+      "description": "Six self-authored skills, each shipping VERSION + deterministic fixture tests (run_tests.py) + passive per-model telemetry: llm-usage-ledger (org-wide LLM usage accounting, no local models needed), md-convert, lmstudio-panel, meeting-canvas, sage-agent-tempo, pub-readiness-check. Convention documented in README.md.",
       "version": "1.0.0",
       "author": {
         "name": "sagearbor"
       },
       "homepage": "https://github.com/sagearbor/agent-skills",
       "repository": "https://github.com/sagearbor/agent-skills",
-      "keywords": ["skills", "testing", "telemetry", "markdown", "docx", "lmstudio", "token-ledger"],
+      "keywords": ["skills", "testing", "telemetry", "markdown", "docx", "lmstudio", "token-ledger", "llm-usage", "cost-tracking"],
       "category": "productivity"
     }
   ]
