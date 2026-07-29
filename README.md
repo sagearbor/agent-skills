@@ -1,6 +1,6 @@
 # Global skills (~/.claude/skills)
 
-[![skill-tests](https://github.com/sagearbor/agent-skills/actions/workflows/skill-tests.yml/badge.svg)](https://github.com/sagearbor/agent-skills/actions/workflows/skill-tests.yml) · [**live regression matrix**](telemetry/matrix.md)
+[![skill-tests](https://github.com/sagearbor/research-agent-skills/actions/workflows/skill-tests.yml/badge.svg)](https://github.com/sagearbor/research-agent-skills/actions/workflows/skill-tests.yml) · [**live regression matrix**](telemetry/matrix.md)
 
 Version-controlled since 2026-07-25 so skill edits across model generations
 are tracked (git log answers "what changed when model X landed").
@@ -23,8 +23,9 @@ The telemetry/ ledger directory is committed too — it IS the data.
 
 | skill | version | tests | last change | description |
 |---|---|---|---|---|
-| **llm-usage-ledger** | 1.0.0 | — | — | Track EVERY LLM usage stream — cloud API calls, Claude Code/Codex subscription transcripts (ingest), and local |
-| **lmstudio-panel** | 0.9.0 | 19 | 2026-07-28 | Control a local LM Studio server — serve, list/load/unload models, model-major batching, and chat/smoke calls  |
+| **agent-coach** | 0.3.0 | 23 | — | Pair-programming coach for people learning an AI coding agent (Claude Code, Codex, Cursor) |
+| **llm-usage-ledger** | 1.0.0 | 20 | 2026-07-28 | Track EVERY LLM usage stream — cloud API calls, Claude Code/Codex subscription transcripts (ingest), and local |
+| **lmstudio-panel** | 0.9.0 | 5 | 2026-07-28 | Control a local LM Studio server — serve, list/load/unload models, model-major batching, and chat/smoke calls  |
 | **md-convert** | 2026-07-25.1 | 9 | 2026-07-25 | Convert a Markdown file to .docx, .html, .pdf, or .xlsx (pandoc-based, with optional generated-datetime stampi |
 | **meeting-canvas** | 2026-07-26.1 | 8 | 2026-07-26 | Generate a fresh interactive meeting worksheet as a self-contained HTML canvas — a draggable/resizable Gantt r |
 | **pub-readiness-check** | 2026-07-26.1 | — | 2026-07-26 | Audit a repo for publication/grant readiness — confirms it has at least a stub of a future paper/manuscript AN |

@@ -1,9 +1,9 @@
 {
-  "name": "sage-skills",
+  "name": "research-skills",
   "version": "1.0.0",
   "description": "Self-authored Claude Code skills with versioned regression tests and a passive model-telemetry matrix: llm-usage-ledger (org-wide LLM usage accounting — cloud API, subscription ingest, local models — with price series and $-vs-tokens dashboards; no local-model software required), md-convert (markdown to docx/html/pdf/xlsx with Word-native TOC), lmstudio-panel (local LM Studio server control, delegates accounting to llm-usage-ledger), meeting-canvas (interactive planning worksheets), sage-agent-tempo (agent work tracking), pub-readiness-check (publication readiness audit).",
   "author": {
     "name": "sagearbor"
   },
-  "repository": "https://github.com/sagearbor/agent-skills"
+  "repository": "https://github.com/sagearbor/research-agent-skills"
 }
