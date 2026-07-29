@@ -124,6 +124,10 @@ def main() -> int:
         if (sch / "findings.schema.json").is_file():
             fs = json.loads((sch / "findings.schema.json").read_text())
             fr = set(fs["properties"]["findings"]["items"].get("required", []))
+            sev_enum = (fs["properties"]["findings"]["items"]["properties"]
+                        ["severity"]["properties"]["level"].get("enum", []))
+            check("enum_severity", set(sev_enum) == set(csec.SEVERITIES),
+                  f"finding severity enum changed: {sev_enum} vs {csec.SEVERITIES}")
             check("findings_required_stable",
                   {"findingId", "occurrenceId", "ruleId", "identity",
                    "fingerprints", "title", "summary", "severity", "confidence",

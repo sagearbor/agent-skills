@@ -59,7 +59,11 @@ def run_suite():
 
     # ---- csec: enums + id stability ---------------------------------------
     import csec
-    check("severities", csec.SEVERITIES == ("critical", "high", "medium", "low", "info"))
+    check("severities",
+          csec.SEVERITIES == ("critical", "high", "medium", "low", "informational"),
+          "must match upstream's enum, which spells the last one 'informational'")
+    check("severity_alias_info", csec.SEVERITY_ALIASES.get("info") == "informational",
+          "'info' must normalise, not fail at seal time")
     check("dispositions_match_upstream",
           set(csec.DISPOSITIONS) == {"reported", "no_issue_found", "rejected",
                                      "not_applicable", "needs_follow_up"})

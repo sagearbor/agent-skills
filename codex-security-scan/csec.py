@@ -45,7 +45,10 @@ COVERAGE_MODES = ("repository", "scoped_path", "diff", "commit", "branch_diff",
 INVENTORY = ("repository", "scoped_path", "diff", "directory", "custom")
 DISPOSITIONS = ("reported", "no_issue_found", "rejected", "not_applicable",
                 "needs_follow_up")
-SEVERITIES = ("critical", "high", "medium", "low", "info")
+# Upstream's enum is "informational"; "info" is accepted as a friendly alias
+# and normalised, because rejecting it only at seal time is a terrible error.
+SEVERITIES = ("critical", "high", "medium", "low", "informational")
+SEVERITY_ALIASES = {"info": "informational", "informative": "informational"}
 
 
 # ---------------------------------------------------------------- paths / npm
@@ -152,6 +155,7 @@ def finish(scan_dir: Path, analysis_path: Path) -> dict:
     findings = []
     for f in a.get("findings", []):
         sev = str(f.get("severity", "medium")).lower()
+        sev = SEVERITY_ALIASES.get(sev, sev)
         if sev not in SEVERITIES:
             raise SystemExit(f"severity {sev!r} not in {SEVERITIES}")
         locs = f.get("locations") or []

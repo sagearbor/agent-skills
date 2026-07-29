@@ -17,7 +17,8 @@ SEV = [
     ("high",     "High",     "▲", "#ec835a", "#ec835a"),
     ("medium",   "Medium",   "◆", "#fab219", "#fab219"),
     ("low",      "Low",      "▬", "#0ca30c", "#0ca30c"),
-    ("info",     "Info",     "○", "#8a8983", "#a8a79f"),
+    # Upstream's enum spells this "informational"; "info" is normalised to it.
+    ("informational", "Info", "○", "#8a8983", "#a8a79f"),
 ]
 ORDER = [s[0] for s in SEV]
 META = {s[0]: {"label": s[1], "icon": s[2], "light": s[3], "dark": s[4]} for s in SEV}
@@ -28,7 +29,7 @@ CSS = """
   --surface-0:#f4f4f1; --surface-1:#fcfcfb; --border:#e2e1db;
   --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#77766f;
   --sev-critical:#d03b3b; --sev-high:#ec835a; --sev-medium:#fab219;
-  --sev-low:#0ca30c; --sev-info:#8a8983;
+  --sev-low:#0ca30c; --sev-informational:#8a8983;
   color-scheme:light; background:var(--surface-0); color:var(--text-primary);
   font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   min-height:100vh; padding:32px 24px 64px;
@@ -36,11 +37,11 @@ CSS = """
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .viz-root{
   color-scheme:dark; --surface-0:#121211; --surface-1:#1a1a19; --border:#33322e;
   --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8f8e85;
-  --sev-info:#a8a79f;}}
+  --sev-informational:#a8a79f;}}
 :root[data-theme="dark"] .viz-root{
   color-scheme:dark; --surface-0:#121211; --surface-1:#1a1a19; --border:#33322e;
   --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8f8e85;
-  --sev-info:#a8a79f;}
+  --sev-informational:#a8a79f;}
 .wrap{max-width:1120px;margin:0 auto}
 h1{font-size:1.5rem;margin:0 0 4px;letter-spacing:-.01em}
 .sub{color:var(--text-secondary);font-size:.875rem;margin:0 0 28px}
@@ -117,7 +118,7 @@ document.querySelectorAll('.sevf').forEach(b=>b.onclick=()=>{
   sevSel.has(s)?sevSel.delete(s):sevSel.add(s);
   b.setAttribute('aria-pressed',sevSel.has(s));apply();});
 q.oninput=apply; repo.onchange=apply;
-const RANK={critical:0,high:1,medium:2,low:3,info:4};
+const RANK={critical:0,high:1,medium:2,low:3,informational:4};
 document.querySelectorAll('#ftbl th[data-k]').forEach(th=>{
   th.onclick=()=>{
     const k=th.dataset.k, tb=document.querySelector('#ftbl tbody');
@@ -140,9 +141,9 @@ def render(data: dict, title: str = "Security posture") -> str:
     repos = data.get("repositories", [])
     for f in findings:
         sev = f.get("severity")
-        f["_sev"] = (sev.get("level") if isinstance(sev, dict) else sev) or "info"
-        if f["_sev"] not in META:
-            f["_sev"] = "info"
+        lvl = (sev.get("level") if isinstance(sev, dict) else sev) or "informational"
+        lvl = {"info": "informational"}.get(str(lvl).lower(), str(lvl).lower())
+        f["_sev"] = lvl if lvl in META else "informational"
 
     open_f = [f for f in findings if (f.get("status") or "open") == "open"]
     totals = {s: sum(1 for f in open_f if f["_sev"] == s) for s in ORDER}
@@ -177,7 +178,7 @@ def render(data: dict, title: str = "Security posture") -> str:
     worst = max((sum(c.values()) for c in by_repo.values()), default=0) or 1
     # Rank by worst-severity-first, then volume, then name: one critical
     # outranks any number of lows.
-    weight = {"critical": 10_000, "high": 500, "medium": 25, "low": 2, "info": 1}
+    weight = {"critical": 10_000, "high": 500, "medium": 25, "low": 2, "informational": 1}
     def risk(kv):
         name, c = kv
         return (-sum(weight[s] * n for s, n in c.items()), -sum(c.values()), name)
