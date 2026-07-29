@@ -27,6 +27,7 @@ Uninstall: `agent_coach.py uninstall`.
 | `agent_coach.py quieter` / `louder` | nudge ALL thresholds ±0.1 |
 | `agent_coach.py off` / `on` | silence / restore |
 | `agent_coach.py escalate <0-1>` | send low-certainty calls to a smarter model (Sonnet); 0 = never |
+| `agent_coach.py budget <daily-$\|off>` | pause scoring once daily spend hits the cap (safety for metered users) |
 | `agent_coach.py dashboard [out.html]` | usage rollup (aggregates `$AGENT_COACH_SHARED_DIR` too) |
 
 ## The rubric
@@ -51,8 +52,16 @@ file there (per-user filenames → no write collisions) — then
 Once per session run
 `python3 ~/.claude/skills/agent-coach/tests/run_tests.py --auto --model <your-model-id>`.
 
-## Notes
-- Cost: one Haiku call per substantive turn (pure Q&A turns are skipped) —
-  pennies-equivalent, and it counts against existing Claude usage; no new keys.
-- ~2s added at turn-end while scoring (acceptable during onboarding).
-- Recursion-guarded: the coach's own model call can't re-trigger the coach.
+## Cost & latency (v0.2)
+- **Metered users** (an `ANTHROPIC_API_KEY` is set — the common org case): the
+  coach makes a **direct minimal Haiku API call (~$0.001, ~1s)** — 30× cheaper
+  than routing through `claude -p`.
+- **Subscription users** (no key): falls back to `claude -p` (key-free, uses
+  existing Claude Code auth, ~$0.03/turn from CC's system-prompt overhead).
+- **Zero added latency**: scoring runs in a **detached background process** in
+  parallel with the answer; the note appears at the *next* turn. Never blocks.
+- **Budget cap** (`budget <daily-$>`) pauses scoring once the day's spend hits
+  the cap — a safety valve for metered/capped users.
+- Only substantive turns are scored (pure Q&A skipped). Recursion-guarded.
+- The direct-API path is verified by construction (mocked tests); a keyed user
+  confirms it live.

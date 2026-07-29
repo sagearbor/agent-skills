@@ -38,8 +38,8 @@ RUBRIC = SKILL_DIR / "best_practices.md"
 ARCHIVE = SKILL_DIR / "archive"
 COACH_DIR = Path(os.environ.get("AGENT_COACH_DIR") or Path.home() / ".agent-coach")
 CONFIG = COACH_DIR / "config.json"
-BANNER = "~~~~~~~~~~~~~~~~~  AGENT COACH  ~~~~~~~~~~~~~~~~~"
-BANNER_END = "~" * len(BANNER)
+BANNER = "~~~~~~~~~~~~~~~  AGENT COACH START  ~~~~~~~~~~~~~~~"
+BANNER_END = "~~~~~~~~~~~~~~~~  AGENT COACH END  ~~~~~~~~~~~~~~~~"
 SCORER_DEFAULT = "haiku"
 ESCALATION_DEFAULT_MODEL = "sonnet"
 CLEAN_STREAK_TO_RAISE = 8   # clean turns before a category's threshold rises
@@ -93,6 +93,8 @@ def default_config():
     return {"enabled": True, "escalation_cutoff": 0.0,
             "scorer_model": SCORER_DEFAULT,
             "escalation_model": ESCALATION_DEFAULT_MODEL,
+            "budget_daily_usd": None,   # None = unlimited
+            "spend_date": "", "spend_today": 0.0,
             "turn": 0,
             "thresholds": {c: START_THRESHOLD for c in categories()},
             "clean_streak": {c: 0 for c in categories()}}
@@ -217,9 +219,36 @@ def build_prompt(user_text, summary):
         "severity = how big the missed opportunity; certainty = how sure you are.")
 
 
-def call_model(model, prompt, timeout=45):
-    """One-shot `claude -p` completion using the user's existing auth. Returns
-    (text, usage_dict) or (None, None). Recursion-guarded."""
+SYS = ("You are a terse pair-programming coach. Output ONLY a JSON array as "
+       "instructed — no prose.")
+HAIKU_API_MODEL = "claude-haiku-4-5"
+HAIKU_IN_PER_M, HAIKU_OUT_PER_M = 1.0, 5.0  # $/M (Haiku 4.5), for budget math
+
+
+def anthropic_score(api_model, prompt, key, timeout=30):
+    """Direct minimal Anthropic API call — ~$0.001, ~1s. Used when the user
+    is metered (ANTHROPIC_API_KEY present). Returns (text, usage) or (None,None).
+    stdlib only; no SDK dependency."""
+    import urllib.request
+    body = json.dumps({"model": api_model, "max_tokens": 400, "system": SYS,
+                       "messages": [{"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body,
+        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"})
+    try:
+        obj = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+        text = "".join(b.get("text", "") for b in obj.get("content", [])
+                       if b.get("type") == "text")
+        return text, obj.get("usage") or {}
+    except Exception:
+        return None, None
+
+
+def claude_p_score(model, prompt, timeout=60):
+    """Fallback for subscription users (no API key): `claude -p` uses their
+    existing Claude Code auth. Costlier (CC's system-prompt overhead) but
+    key-free. Recursion-guarded."""
     env = dict(os.environ, AGENT_COACH_ACTIVE="1")
     try:
         p = subprocess.run(
@@ -232,6 +261,30 @@ def call_model(model, prompt, timeout=45):
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError,
             OSError):
         return None, None
+
+
+def call_model(model, prompt, timeout=60, api_model=None):
+    """Prefer the cheap direct API when a key is available (metered users:
+    ~$0.001), else `claude -p` (subscription users: key-free)."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        text, usage = anthropic_score(api_model or HAIKU_API_MODEL, prompt, key)
+        if text is not None:
+            return text, {**usage, "_path": "api"}
+    text, usage = claude_p_score(model, prompt, timeout)
+    return text, ({**(usage or {}), "_path": "claude_p"} if text is not None
+                  else None)
+
+
+def usage_cost_usd(usage):
+    """Best-effort $ from a usage dict (API tokens, or claude -p's own field)."""
+    if not usage:
+        return 0.0
+    if usage.get("total_cost_usd") is not None:
+        return float(usage["total_cost_usd"])
+    tin = (usage.get("input_tokens") or 0) + (usage.get("cache_creation_input_tokens") or 0)
+    tout = usage.get("output_tokens") or 0
+    return tin / 1e6 * HAIKU_IN_PER_M + tout / 1e6 * HAIKU_OUT_PER_M
 
 
 def parse_scores(text):
@@ -298,22 +351,66 @@ def log_event(cfg, project, scores, fired, usage):
             pass
 
 
+PENDING = lambda: COACH_DIR / "pending_note.txt"  # noqa: E731
+
+
 def run_hook(stdin_data):
+    """Non-blocking: surface any ready note from the PREVIOUS turn, then spawn
+    a detached background scorer for THIS turn and return immediately (zero
+    added latency — the coach runs in parallel with the user reading the
+    answer). One-turn-delayed notes."""
     if os.environ.get("AGENT_COACH_ACTIVE"):
-        return {}  # recursion guard: our own claude -p call must not re-coach
+        return {}  # recursion guard
     cfg = load_config()
     if not cfg.get("enabled", True):
         return {}
+    out = {}
+    p = PENDING()
+    if p.exists():
+        try:
+            note = p.read_text()
+            p.unlink()
+            if note.strip():
+                out = {"systemMessage": note}
+        except OSError:
+            pass
     tp = (stdin_data or {}).get("transcript_path")
-    if not tp:
-        return {}
-    turn = extract_last_turn(tp)
+    if tp:
+        env = dict(os.environ, AGENT_COACH_ACTIVE="1")
+        try:  # fire-and-forget background scorer
+            subprocess.Popen(
+                [sys.executable, str(SKILL_DIR / "agent_coach.py"), "score",
+                 "--transcript", tp,
+                 "--cwd", (stdin_data or {}).get("cwd") or "."],
+                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True)
+        except OSError:
+            pass
+    return out
+
+
+def do_score(transcript_path, cwd):
+    """The actual scoring — runs in the detached background process. Writes a
+    pending note (surfaced next turn), logs the event, updates thresholds and
+    the daily budget."""
+    cfg = load_config()
     cfg["turn"] += 1
+    turn = extract_last_turn(transcript_path)
     if turn is None:
         save_config(cfg)
-        return {}
+        return
+    # daily budget gate
+    today = datetime.date.today().isoformat()
+    if cfg.get("spend_date") != today:
+        cfg["spend_date"], cfg["spend_today"] = today, 0.0
+    cap = cfg.get("budget_daily_usd")
+    if cap is not None and cfg["spend_today"] >= cap:
+        save_config(cfg)
+        return  # budget spent for today — stay silent
+
     user_text, summary, _meta = turn
     text, usage = call_model(cfg["scorer_model"], build_prompt(user_text, summary))
+    cfg["spend_today"] = round(cfg.get("spend_today", 0.0) + usage_cost_usd(usage), 5)
     scores = parse_scores(text)
 
     fired = []
@@ -324,24 +421,25 @@ def run_hook(stdin_data):
         cut = cfg.get("escalation_cutoff", 0.0)
         if cut > 0 and s["certainty"] < cut:
             et, eu = call_model(cfg["escalation_model"],
-                                build_prompt(user_text, summary))
+                                build_prompt(user_text, summary),
+                                api_model="claude-sonnet-5")
+            cfg["spend_today"] = round(cfg["spend_today"] + usage_cost_usd(eu), 5)
             for e in parse_scores(et):
                 if e["category"] == s["category"] and e["severity"] >= thr:
                     s = {**e, "escalated": True}
                     break
             else:
-                continue  # smarter model disagreed -> drop (false positive killed)
+                continue  # smarter model disagreed -> drop the false positive
         fired.append(s)
 
     update_dynamic(cfg, {f["category"] for f in fired})
-    project = Path((stdin_data or {}).get("cwd") or ".").name
-    log_event(cfg, project, scores, fired, usage)
+    log_event(cfg, Path(cwd).name, scores, fired, usage)
     save_config(cfg)
-    if not fired:
-        return {}
-    note = format_note(fired)
-    (COACH_DIR / "last_note.txt").write_text(note)
-    return {"systemMessage": note}
+    if fired:
+        COACH_DIR.mkdir(parents=True, exist_ok=True)
+        note = format_note(fired)
+        PENDING().write_text(note)
+        (COACH_DIR / "last_note.txt").write_text(note)
 
 
 # ----------------------------------------------------------------- installers
@@ -486,6 +584,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("hook")
+    p = sub.add_parser("score")  # internal: run by the background scorer
+    p.add_argument("--transcript", required=True); p.add_argument("--cwd", default=".")
+    p = sub.add_parser("budget"); p.add_argument("daily_usd")  # number or 'off'
     sub.add_parser("install"); sub.add_parser("uninstall")
     sub.add_parser("status")
     p = sub.add_parser("set"); p.add_argument("category"); p.add_argument("value", type=float)
@@ -506,6 +607,9 @@ def main(argv=None):
         out = run_hook(data)
         if out:
             print(json.dumps(out))
+        return 0
+    if a.cmd == "score":
+        do_score(a.transcript, a.cwd)
         return 0
     if a.cmd == "install":
         return install()
@@ -533,6 +637,14 @@ def main(argv=None):
         cfg["escalation_cutoff"] = max(0.0, min(1.0, a.cutoff)); save_config(cfg)
         print(f"escalation_cutoff -> {cfg['escalation_cutoff']:.2f} "
               f"(low-certainty interventions go to {cfg['escalation_model']}; 0 = never)")
+    elif a.cmd == "budget":
+        cfg["budget_daily_usd"] = (None if str(a.daily_usd).lower() in ("off", "none")
+                                   else max(0.0, float(a.daily_usd)))
+        save_config(cfg)
+        b = cfg["budget_daily_usd"]
+        print(f"daily budget -> {'unlimited' if b is None else f'${b:.2f}'} "
+              f"(scoring pauses for the day once hit; spent today "
+              f"${cfg.get('spend_today', 0):.4f})")
     elif a.cmd == "rules-snapshot":
         rules_snapshot()
     elif a.cmd == "rules-list":

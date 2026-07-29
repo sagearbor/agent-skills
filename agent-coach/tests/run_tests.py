@@ -91,6 +91,10 @@ def run_suite():
         check("recursion_guard", ac.run_hook({"transcript_path": "x"}) == {})
         del os.environ["AGENT_COACH_ACTIVE"]
 
+        # cost + budget helpers
+        check("usage_cost", abs(ac.usage_cost_usd(
+            {"input_tokens": 1_000_000, "output_tokens": 0}) - 1.0) < 1e-6)
+
         # transcript parse: a substantive turn is summarized; pure-chat is skipped
         tj = Path(td) / "t.jsonl"
         tj.write_text("\n".join(json.dumps(x) for x in [
@@ -107,35 +111,50 @@ def run_suite():
             {"type": "user", "message": {"content": "hi"}}))
         check("activity_gate_skips_chat", ac.extract_last_turn(chat) is None)
 
-        # full hook with a MOCKED model -> fires a note + logs an event
-        ac.call_model = lambda m, p, timeout=45: (
+        # do_score (async worker) with a MOCKED model -> writes a pending note
+        # + logs an event; run_hook then SURFACES that pending note next turn
+        ac.call_model = lambda m, p, timeout=60, api_model=None: (
             '[{"category":"model-selection","severity":0.9,"certainty":0.95,'
             '"note":"Opus for a typo — use Haiku"}]', {"input_tokens": 50})
         cfg = ac.default_config(); ac.save_config(cfg)
+        ac.do_score(str(tj), "/proj/demo")
+        check("do_score_writes_pending", ac.PENDING().exists()
+              and "model-selection" in ac.PENDING().read_text())
         out = ac.run_hook({"transcript_path": str(tj), "cwd": "/proj/demo"})
-        check("hook_fires_note", "systemMessage" in out
+        check("hook_surfaces_pending", "systemMessage" in out
               and "AGENT COACH" in out["systemMessage"]
-              and "model-selection" in out["systemMessage"], f"got {out}")
-        evf = ac.events_file()
-        check("event_logged", evf.exists()
-              and "model-selection" in evf.read_text())
+              and not ac.PENDING().exists(), f"got {out}")  # note consumed
+        check("event_logged", ac.events_file().exists()
+              and "model-selection" in ac.events_file().read_text())
+
+        # budget gate: once spend >= cap, do_score stays silent
+        cfg = ac.default_config(); cfg["budget_daily_usd"] = 0.001
+        cfg["spend_date"] = datetime.date.today().isoformat()
+        cfg["spend_today"] = 0.002; ac.save_config(cfg)
+        if ac.PENDING().exists():
+            ac.PENDING().unlink()
+        ac.do_score(str(tj), "/proj/demo")
+        check("budget_gate_silences", not ac.PENDING().exists())
 
         # escalation: low certainty + cutoff>0 -> smarter model consulted; if it
-        # disagrees (severity below thr) the finding is dropped
+        # disagrees (severity below thr) the finding is dropped (no pending note)
         cfg = ac.default_config(); cfg["escalation_cutoff"] = 0.9
         cfg["thresholds"]["model-selection"] = 0.5; ac.save_config(cfg)
+        if ac.PENDING().exists():
+            ac.PENDING().unlink()
         calls = {"n": 0}
 
-        def flaky(m, p, timeout=45):
+        def flaky(m, p, timeout=60, api_model=None):
             calls["n"] += 1
             if calls["n"] == 1:  # scorer: high severity, LOW certainty
                 return ('[{"category":"model-selection","severity":0.8,'
                         '"certainty":0.2,"note":"maybe"}]', {})
             return ('[]', {})  # escalation model disagrees -> drop
         ac.call_model = flaky
-        out = ac.run_hook({"transcript_path": str(tj), "cwd": "/proj/demo"})
+        ac.do_score(str(tj), "/proj/demo")
         check("escalation_drops_false_positive",
-              out == {} and calls["n"] == 2, f"got {out} calls={calls}")
+              not ac.PENDING().exists() and calls["n"] == 2,
+              f"calls={calls}")
 
         # dashboard renders from the logged events
         dpath = Path(td) / "dash.html"
