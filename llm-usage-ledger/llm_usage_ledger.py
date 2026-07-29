@@ -173,9 +173,16 @@ def read_ledgers(days: float = None, scope: str = "skill"):
                 continue
             if cutoff:
                 try:
-                    if datetime.datetime.fromisoformat(e["ts"]) < cutoff:
+                    ts = datetime.datetime.fromisoformat(e["ts"])
+                    # Writers differ: this repo's token_ledger.py stamps an
+                    # offset ("...-04:00") while some ingest paths stamp naive
+                    # local time. Comparing the two raised TypeError and made
+                    # --days unusable, which is the flag you need to see gaps.
+                    if ts.tzinfo is None:
+                        ts = ts.astimezone()
+                    if ts < cutoff:
                         continue
-                except (KeyError, ValueError):
+                except (KeyError, ValueError, TypeError):
                     pass
             events.append(e)
     return events
