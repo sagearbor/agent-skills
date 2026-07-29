@@ -25,9 +25,9 @@ The telemetry/ ledger directory is committed too — it IS the data.
 |---|---|---|---|---|
 | **agent-coach** | 0.3.0 | 23 | 2026-07-28 | Pair-programming coach for people learning an AI coding agent (Claude Code, Codex, Cursor) |
 | **lmstudio-panel** | 0.8.0 | 19 | 2026-07-28 | Control a local LM Studio server (serve, load/unload models, model-major batching) and log EVERY local-LLM cal |
-| **md-convert** | 2026-07-25.1 | 9 | 2026-07-28 | Convert a Markdown file to .docx, .html, .pdf, or .xlsx (pandoc-based, with optional generated-datetime stampi |
-| **meeting-canvas** | 2026-07-26.1 | 8 | 2026-07-28 | Generate a fresh interactive meeting worksheet as a self-contained HTML canvas — a draggable/resizable Gantt r |
-| **pub-readiness-check** | 2026-07-26.1 | — | 2026-07-28 | Audit a repo for publication/grant readiness — confirms it has at least a stub of a future paper/manuscript AN |
+| **md-convert** | 2026-07-25.1 | 9 | 2026-07-25 | Convert a Markdown file to .docx, .html, .pdf, or .xlsx (pandoc-based, with optional generated-datetime stampi |
+| **meeting-canvas** | 2026-07-26.1 | 8 | 2026-07-26 | Generate a fresh interactive meeting worksheet as a self-contained HTML canvas — a draggable/resizable Gantt r |
+| **pub-readiness-check** | 2026-07-26.1 | — | 2026-07-26 | Audit a repo for publication/grant readiness — confirms it has at least a stub of a future paper/manuscript AN |
 | **sage-agent-tempo** | 2026-07-26.1 | 5 | 2026-07-28 | Track what AI agents build, how long it takes, and what it costs |
 
 <!-- SKILLS:END -->
