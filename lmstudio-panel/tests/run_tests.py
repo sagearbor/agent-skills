@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Regression tests + telemetry for the lmstudio-panel global skill.
 
-Fully deterministic — no LM Studio server required. Exercises the ledger
-write/read/aggregate path (the part other repos and the org depend on) with
-a temp ledger dir, plus CLI integrity.
+Fully deterministic — no LM Studio server required. lmstudio-panel is now
+server-control only; all accounting tests live in the sibling
+llm-usage-ledger skill. This suite checks the module imports (including the
+delegation to llm-usage-ledger), that ledger writes still flow through the
+delegated log_usage, and CLI integrity.
 
 Usage: run_tests.py --model <id> [--auto] | --report
 """
@@ -38,7 +40,7 @@ def run_suite():
     def check(name, cond, why=""):
         r[name] = "pass" if cond else f"FAIL: {why}"
 
-    # 1. module imports clean
+    # 1. module imports clean (includes the llm-usage-ledger delegation)
     try:
         import lmstudio_panel as lp
         check("module_imports", True)
@@ -46,182 +48,42 @@ def run_suite():
         check("module_imports", False, repr(e))
         return r
 
+    # 2. accounting is delegated: log_usage comes from llm-usage-ledger and
+    # writes to the shared ledger dir when called through this module
     with tempfile.TemporaryDirectory() as td:
         os.environ["LLM_TOKEN_LEDGER_DIR"] = td
-
-        # 2. ledger write/read roundtrip with full schema
-        usage = {"prompt_tokens": 100, "completion_tokens": 20,
-                 "completion_tokens_details": {"reasoning_tokens": 7}}
-        ev = lp.log_usage("test-model", usage, 1.5, task_tag="unit")
-        back = lp.read_ledgers()
-        check("ledger_roundtrip", len(back) == 1
-              and back[0]["prompt_tokens"] == 100
-              and back[0]["reasoning_tokens"] == 7,
-              f"got {back!r}")
-        required = {"ts", "duration_s", "provider", "machine", "user",
-                    "project", "model", "prompt_tokens", "completion_tokens",
-                    "reasoning_tokens", "task_tag"}
-        check("schema_complete", required.issubset(ev.keys()),
-              f"missing {required - set(ev.keys())}")
-
-        # 3. reasoning tokens absent -> null, not 0
-        ev2 = lp.log_usage("test-model", {"prompt_tokens": 5,
-                                          "completion_tokens": 2}, 0.1)
-        check("reasoning_null_not_zero", ev2["reasoning_tokens"] is None)
-
-        # 4. per-user filename (shared-dir collision safety)
-        files = list(Path(td).glob("lmstudio-*.jsonl"))
-        check("per_user_filename", len(files) == 1
-              and lp.whoami() in files[0].name
-              and lp.machine_name() in files[0].name)
-
-        # 5. aggregation math on a known fixture
-        lp.log_usage("model-b", {"prompt_tokens": 50, "completion_tokens": 10},
-                     2.0, project="proj-x")
-        agg = lp.aggregate(lp.read_ledgers(), by="model")
-        check("aggregate_math",
-              agg.get("test-model", {}).get("prompt") == 105
-              and agg.get("model-b", {}).get("calls") == 1,
-              f"got {agg!r}")
-
-        # 6. hourly windows + burst ratio derivable from raw events
-        w, mean, peak, burst = lp.hourly_windows(lp.read_ledgers())
-        check("windows_derivable", len(w) >= 1 and mean > 0 and peak,
-              f"got {w!r}")
-
-        # 7. corrupt ledger line skipped, not fatal
-        files[0].write_text(files[0].read_text() + "NOT JSON\n")
-        check("corrupt_line_tolerated", len(lp.read_ledgers()) == 3)
-
-        # 8. scope='all' merges foreign-writer schemas (tokens_in/tokens_out)
-        (Path(td) / "ledger.jsonl").write_text(json.dumps(
-            {"schema": 1, "ts": "2026-07-27T12:00:00-04:00",
-             "provider": "local", "model": "other-writer-model",
-             "tokens_in": 500, "tokens_out": 40,
-             "project": "another-repo"}) + "\n")
-        merged = lp.read_ledgers(scope="all")
-        norm = [e for e in merged if e.get("model") == "other-writer-model"]
-        check("foreign_schema_merged", len(merged) == 4 and len(norm) == 1
-              and norm[0]["prompt_tokens"] == 500
-              and lp.is_local_event(norm[0]),
-              f"merged={len(merged)} norm={norm!r}")
-
-        # 8b. model-name normalization for price matching
-        check("normalize_names",
-              lp.normalize_model_name("lmstudio-community/Qwen3-32B-MLX-4bit")
-              == "qwen3-32b"
-              and lp.normalize_model_name("google/gemma-4-e4b:2")
-              == "gemma-4-e4b")
-
-        # 8c. cheapest-hosted match + as-of price join (no network)
-        table = {"together/qwen3-32b": {"mode": "chat",
-                                        "input_cost_per_token": 4e-7,
-                                        "output_cost_per_token": 1.2e-6},
-                 "groq/qwen3-32b": {"mode": "chat",
-                                    "input_cost_per_token": 2.9e-7,
-                                    "output_cost_per_token": 5.9e-7}}
-        hit = lp.match_price("Qwen3-32B-MLX-4bit", table)
-        check("cheapest_hosted_match", hit is not None
-              and abs(hit[0] - 0.29) < 1e-6 and "groq" in hit[2],
-              f"got {hit!r}")
-        table["azure/qwen3-32b-fp8"] = {"mode": "chat",
-                                        "input_cost_per_token": 1e-7,
-                                        "output_cost_per_token": 2e-7}
-        table["x/gpt-5-nano"] = {"mode": "chat",
-                                 "input_cost_per_token": 5e-8,
-                                 "output_cost_per_token": 4e-7}
-        check("no_variant_overmatch",
-              lp.match_price("gpt-5", table) is None  # nano is NOT gpt-5
-              and abs(lp.match_price("qwen3-32b", table)[0] - 0.1) < 1e-6,
-              "prefix over-match not blocked or fp8 suffix not accepted")
-        (Path(td) / "prices.jsonl").write_text(
-            '{"ts":"2026-07-01","model":"qwen3-32b","input_per_m":0.40,"output_per_m":1.2,"source":"t"}\n'
-            '{"ts":"2026-07-20","model":"qwen3-32b","input_per_m":0.29,"output_per_m":0.59,"source":"t"}\n'
-            '{"ts":"2026-07-01","model":"reference","input_per_m":2.5,"output_per_m":10.0,"source":"t"}\n')
-        s = lp.load_price_series()
-        early = lp.as_of_price("qwen3-32b", "2026-07-10T12:00:00", s)
-        late = lp.as_of_price("qwen3-32b", "2026-07-26T12:00:00", s)
-        fall = lp.as_of_price("unknown-model", "2026-07-26T12:00:00", s)
-        check("as_of_join", early[0] == 0.40 and late[0] == 0.29
-              and fall[2] == "reference",
-              f"early={early} late={late} fall={fall}")
-
-        # 9. html report renders from the merged dir (interactive version:
-        # data island + filter controls + static fallback table)
-        out = Path(td) / "report.html"
-        lp.html_report(out)
-        html = out.read_text()
-        check("html_report_renders",
-              'type="application/json"' in html
-              and "another-repo" in html          # data island has the project
-              and 'data-c="local"' in html        # class toggle chips
-              and 'data-m="usd"' in html          # $/tokens metric toggle
-              and 'id="mlist"' in html            # collapsible model filter
-              and "<table>" in html,              # JS-independent fallback
-              "missing data island / filters / table")
-
-        # 9a2. claude-code ingest: parse fixture transcript, idempotent merge
-        fake_home = Path(td) / "home"
-        proj = fake_home / ".claude" / "projects" / "-Users-x-repo"
-        proj.mkdir(parents=True)
-        line = json.dumps({"uuid": "u-1", "timestamp": "2026-07-27T01:02:03Z",
-                           "cwd": "/Users/x/repo",
-                           "message": {"model": "claude-sonnet-5", "usage": {
-                               "input_tokens": 10,
-                               "cache_creation_input_tokens": 90,
-                               "cache_read_input_tokens": 1000,
-                               "output_tokens": 20}}})
-        (proj / "sess.jsonl").write_text(line + "\nnot json but no usage\n")
-        real_home = Path.home
-        Path.home = staticmethod(lambda: fake_home)  # noqa
         try:
-            lp.ingest_claude_code()
-            lp.ingest_claude_code()  # second run must not duplicate
+            import llm_usage_ledger as ul
+            ev = lp.log_usage("test-model", {"prompt_tokens": 3,
+                                             "completion_tokens": 1}, 0.1,
+                              task_tag="delegation-test")
+            files = list(Path(td).glob("lmstudio-*.jsonl"))
+            check("delegates_to_ledger",
+                  lp.log_usage is ul.log_usage
+                  and ev["prompt_tokens"] == 3
+                  and len(files) == 1
+                  and json.loads(files[0].read_text())["task_tag"]
+                  == "delegation-test",
+                  f"files={files!r} ev={ev!r}")
+        except Exception as e:
+            check("delegates_to_ledger", False, repr(e))
         finally:
-            Path.home = real_home
-        derived = list(Path(td).glob("claude-code-*.jsonl"))
-        ok = False
-        if len(derived) == 1:
-            recs = [json.loads(l) for l in
-                    derived[0].read_text().splitlines()]
-            ok = (len(recs) == 1 and recs[0]["prompt_tokens"] == 10
-                  and recs[0]["cache_w5_tokens"] == 90
-                  and recs[0]["cache_read_tokens"] == 1000
-                  and recs[0]["subscription"] is True
-                  and recs[0]["project"] == "repo")
-        check("claude_code_ingest", ok, f"derived={derived!r}")
+            os.environ.pop("LLM_TOKEN_LEDGER_DIR", None)
 
-        # 9a3. subscription rows separate in aggregation + cache discount
-        (Path(td) / "prices.jsonl").write_text(
-            (Path(td) / "prices.jsonl").read_text()
-            + '{"ts":"2026-07-01","model":"claude-sonnet-5",'
-              '"input_per_m":3.0,"output_per_m":15.0,"source":"t"}\n')
-        ev = lp._all_usage_events()
-        sub = [e for e in ev if e["sub"]]
-        rows2, _g = lp._agg_rows(ev, lp.load_price_series())
-        subrow = [r for r in rows2 if r["u"]]
-        # 10 in @$3 + 20 out @$15 + 1000 reads @10% + 90 5m-writes @1.25x
-        expect = (10/1e6*3.0 + 20/1e6*15.0 + 1000/1e6*0.3
-                  + 90/1e6*3.0*1.25)
-        check("subscription_agg_and_cache_price",
-              len(sub) == 1 and len(subrow) == 1
-              and abs(subrow[0]["s"] - round(expect, 4)) < 1e-6,
-              f"sub={sub!r} subrow={subrow!r} expect={expect}")
+    # 3. back-compat re-exports still importable from this module
+    reexports = ["read_ledgers", "aggregate", "hourly_windows", "as_of_price",
+                 "load_price_series", "html_report", "print_report",
+                 "prices_update", "normalize_model_name", "match_price",
+                 "is_local_event", "ledger_dir", "machine_name", "whoami",
+                 "detect_project"]
+    missing = [n for n in reexports if not callable(getattr(lp, n, None))]
+    check("backcompat_reexports", not missing, f"missing {missing}")
 
-        # 9b. hostile model name cannot break out of the static table
-        lp.log_usage("<script>alert(1)</script>", {"prompt_tokens": 1,
-                                                   "completion_tokens": 1}, 0.1)
-        lp.html_report(out)
-        check("html_escapes_model_names",
-              "<script>alert(1)</script>" not in out.read_text())
-
-    os.environ.pop("LLM_TOKEN_LEDGER_DIR", None)
-
-    # 8. project auto-detect returns a non-empty string
+    # 4. project auto-detect returns a non-empty string
     check("project_autodetect", isinstance(lp.detect_project(), str)
           and len(lp.detect_project()) > 0)
 
-    # 9. CLI help exits 0
+    # 5. CLI help exits 0
     p = subprocess.run([sys.executable, str(SKILL_DIR / "lmstudio_panel.py"),
                         "--help"], capture_output=True, timeout=20)
     check("cli_help", p.returncode == 0)

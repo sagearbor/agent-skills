@@ -141,3 +141,18 @@ You are the sage-agent-tempo sync agent. Your only job is to update developer_ch
 - Discovered items should be appended to the appropriate phase with the next available ID.
 - If a phase referenced by a discovered item does not exist, create it.
 - The sync agent should log each update it makes (e.g., "Marked 2.1 as done", "Added new item 3.4: Handle edge case X").
+
+## Cost data source
+
+Cost lines in tempo reports MUST come from the **llm-usage-ledger** skill —
+one merged source of truth across cloud API calls, subscription-tool ingest,
+and local models. Do not estimate costs from session data alone. Example:
+
+```bash
+python3 ~/.claude/skills/llm-usage-ledger/llm_usage_ledger.py report --by project --days 7
+```
+
+Native CLI integration (the TypeScript CLI reading `~/.llm_token_ledger`
+directly) is a follow-up tracked in the canonical sage-agent-tempo repo;
+until then, shell out to the command above and merge its numbers into the
+report.
