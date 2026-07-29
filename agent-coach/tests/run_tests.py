@@ -127,6 +127,23 @@ def run_suite():
         check("event_logged", ac.events_file().exists()
               and "model-selection" in ac.events_file().read_text())
 
+        # frequency ramp: turns 1-3 always score; turn 4 announces switch to
+        # every-5 (no model call); turn 5 scores; turn 6 skipped -> 4 calls,
+        # and a ramp note appears on turn 4
+        cfg = ac.default_config(); ac.save_config(cfg)
+        mc = {"n": 0}
+        ac.call_model = lambda m, p, timeout=60, api_model=None: (
+            mc.__setitem__("n", mc["n"] + 1) or ('[]', {}))
+        ramp_seen = False
+        for i in range(6):
+            if ac.PENDING().exists():
+                ac.PENDING().unlink()
+            ac.do_score(str(tj), "/proj/demo")
+            if i == 3 and ac.PENDING().exists() and "every 5" in ac.PENDING().read_text():
+                ramp_seen = True
+        check("frequency_ramp", mc["n"] == 4 and ramp_seen,
+              f"model calls={mc['n']} (expect 4), ramp_seen={ramp_seen}")
+
         # budget gate: once spend >= cap, do_score stays silent
         cfg = ac.default_config(); cfg["budget_daily_usd"] = 0.001
         cfg["spend_date"] = datetime.date.today().isoformat()

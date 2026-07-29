@@ -93,8 +93,10 @@ def default_config():
     return {"enabled": True, "escalation_cutoff": 0.0,
             "scorer_model": SCORER_DEFAULT,
             "escalation_model": ESCALATION_DEFAULT_MODEL,
-            "budget_daily_usd": None,   # None = unlimited
+            "budget_daily_usd": None,   # None = unlimited (opt-in cap only)
             "spend_date": "", "spend_today": 0.0,
+            "score_frequency": 1,       # 1 = every turn; N = every Nth
+            "ramp_after": 3, "ramp_to": 5, "frequency_ramped": False,
             "turn": 0,
             "thresholds": {c: START_THRESHOLD for c in categories()},
             "clean_streak": {c: 0 for c in categories()}}
@@ -395,6 +397,29 @@ def do_score(transcript_path, cwd):
     the daily budget."""
     cfg = load_config()
     cfg["turn"] += 1
+    turn_no = cfg["turn"]
+
+    # frequency ramp: score every turn for the first `ramp_after` turns (so a
+    # quick user who only does a few turns gets full coverage), then switch to
+    # every `ramp_to`-th turn to save cost — announced once, revertible with
+    # `agent_coach.py frequency 1`.
+    ramp_note = None
+    if turn_no > cfg.get("ramp_after", 3) and not cfg.get("frequency_ramped"):
+        cfg["frequency_ramped"] = True
+        cfg["score_frequency"] = cfg.get("ramp_to", 5)
+        ramp_note = (BANNER + "\n coaching now runs every "
+                     f"{cfg['score_frequency']} turns to save cost.\n"
+                     " keep every turn:  agent_coach.py frequency 1\n" + BANNER_END)
+    freq = cfg.get("score_frequency", 1)
+    should_score = (turn_no <= cfg.get("ramp_after", 3) or freq <= 1
+                    or turn_no % freq == 0)
+    if not should_score:
+        if ramp_note:  # still announce the switch on the ramp turn
+            COACH_DIR.mkdir(parents=True, exist_ok=True)
+            PENDING().write_text(ramp_note)
+        save_config(cfg)
+        return
+
     turn = extract_last_turn(transcript_path)
     if turn is None:
         save_config(cfg)
@@ -435,9 +460,11 @@ def do_score(transcript_path, cwd):
     update_dynamic(cfg, {f["category"] for f in fired})
     log_event(cfg, Path(cwd).name, scores, fired, usage)
     save_config(cfg)
-    if fired:
+    if fired or ramp_note:
         COACH_DIR.mkdir(parents=True, exist_ok=True)
-        note = format_note(fired)
+        note = format_note(fired) if fired else ""
+        if ramp_note:
+            note = (note + "\n" + ramp_note) if note else ramp_note
         PENDING().write_text(note)
         (COACH_DIR / "last_note.txt").write_text(note)
 
@@ -587,6 +614,7 @@ def main(argv=None):
     p = sub.add_parser("score")  # internal: run by the background scorer
     p.add_argument("--transcript", required=True); p.add_argument("--cwd", default=".")
     p = sub.add_parser("budget"); p.add_argument("daily_usd")  # number or 'off'
+    p = sub.add_parser("frequency"); p.add_argument("n", type=int)  # 1=every turn
     sub.add_parser("install"); sub.add_parser("uninstall")
     sub.add_parser("status")
     p = sub.add_parser("set"); p.add_argument("category"); p.add_argument("value", type=float)
@@ -642,9 +670,15 @@ def main(argv=None):
                                    else max(0.0, float(a.daily_usd)))
         save_config(cfg)
         b = cfg["budget_daily_usd"]
-        print(f"daily budget -> {'unlimited' if b is None else f'${b:.2f}'} "
-              f"(scoring pauses for the day once hit; spent today "
+        print(f"daily budget -> {'unlimited (off)' if b is None else f'${b:.2f}'} "
+              f"(optional; scoring pauses for the day once hit; spent today "
               f"${cfg.get('spend_today', 0):.4f})")
+    elif a.cmd == "frequency":
+        cfg["score_frequency"] = max(1, a.n)
+        cfg["frequency_ramped"] = True  # explicit choice — don't auto-ramp again
+        save_config(cfg)
+        print(f"scoring frequency -> every {cfg['score_frequency']} turn(s) "
+              f"({'every turn' if cfg['score_frequency'] == 1 else 'cost-saving'})")
     elif a.cmd == "rules-snapshot":
         rules_snapshot()
     elif a.cmd == "rules-list":

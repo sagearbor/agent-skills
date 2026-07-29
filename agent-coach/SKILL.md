@@ -27,7 +27,8 @@ Uninstall: `agent_coach.py uninstall`.
 | `agent_coach.py quieter` / `louder` | nudge ALL thresholds ±0.1 |
 | `agent_coach.py off` / `on` | silence / restore |
 | `agent_coach.py escalate <0-1>` | send low-certainty calls to a smarter model (Sonnet); 0 = never |
-| `agent_coach.py budget <daily-$\|off>` | pause scoring once daily spend hits the cap (safety for metered users) |
+| `agent_coach.py budget <daily-$\|off>` | OPTIONAL daily spend cap (off by default; pauses scoring once hit) |
+| `agent_coach.py frequency <n>` | score every Nth turn (1 = every turn); overrides the auto-ramp |
 | `agent_coach.py dashboard [out.html]` | usage rollup (aggregates `$AGENT_COACH_SHARED_DIR` too) |
 
 ## The rubric
@@ -60,8 +61,11 @@ Once per session run
   existing Claude Code auth, ~$0.03/turn from CC's system-prompt overhead).
 - **Zero added latency**: scoring runs in a **detached background process** in
   parallel with the answer; the note appears at the *next* turn. Never blocks.
-- **Budget cap** (`budget <daily-$>`) pauses scoring once the day's spend hits
-  the cap — a safety valve for metered/capped users.
+- **Frequency ramp**: scores every turn for the first 3 turns (a quick user who
+  only does a few turns gets full coverage), then auto-switches to every 5th
+  turn to save cost — announced once, revert with `frequency 1`.
+- **Budget cap** (`budget <daily-$>`) is OPTIONAL and OFF by default — turn it
+  on only if you want a hard daily ceiling; a coach you find useful keeps running.
 - Only substantive turns are scored (pure Q&A skipped). Recursion-guarded.
 - The direct-API path is verified by construction (mocked tests); a keyed user
   confirms it live.

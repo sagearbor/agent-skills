@@ -8,6 +8,7 @@ Auto-rendered from `telemetry/*.jsonl` (append-only run ledgers; each skill's `r
 |---|---|---|---|---|---|---|
 | agent-coach | 0.1.0 | claude-fable-5 | 1 | 100% | 0.02±0.00s | 2026-07-28 |
 | agent-coach | 0.2.0 | claude-fable-5 | 1 | 100% | 0.03±0.00s | 2026-07-28 |
+| agent-coach | 0.3.0 | claude-fable-5 | 3 | 97% | 0.03±0.00s | 2026-07-28 |
 | lmstudio-panel | 0.1.0 | claude-fable-5 | 1 | 100% | 0.15±0.00s | 2026-07-27 |
 | lmstudio-panel | 0.2.0 | claude-fable-5 | 1 | 100% | 0.24±0.00s | 2026-07-27 |
 | lmstudio-panel | 0.3.0 | claude-fable-5 | 1 | 100% | 0.19±0.00s | 2026-07-27 |
