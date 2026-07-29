@@ -1,23 +1,32 @@
 {
-  "name": "sagearbor-agent-skills",
+  "name": "research-agent-skills",
   "owner": {
     "name": "sagearbor"
   },
   "metadata": {
-    "description": "Sage Arbor's agent skills marketplace — tested, versioned, telemetry-enrolled skills for Claude Code"
+    "description": "Sage Arbor's agent skills marketplace \u2014 tested, versioned, telemetry-enrolled skills for Claude Code"
   },
   "plugins": [
     {
-      "name": "sage-skills",
+      "name": "research-skills",
       "source": "./",
-      "description": "Five self-authored skills, each shipping VERSION + deterministic fixture tests (run_tests.py) + passive per-model telemetry: md-convert, lmstudio-panel, meeting-canvas, sage-agent-tempo, pub-readiness-check. Convention documented in README.md.",
+      "description": "Six self-authored skills, each shipping VERSION + deterministic fixture tests (run_tests.py) + passive per-model telemetry: agent-coach, md-convert, lmstudio-panel, meeting-canvas, sage-agent-tempo, pub-readiness-check. Convention documented in README.md.",
       "version": "1.0.0",
       "author": {
         "name": "sagearbor"
       },
-      "homepage": "https://github.com/sagearbor/agent-skills",
-      "repository": "https://github.com/sagearbor/agent-skills",
-      "keywords": ["skills", "testing", "telemetry", "markdown", "docx", "lmstudio", "token-ledger"],
+      "homepage": "https://github.com/sagearbor/research-agent-skills",
+      "repository": "https://github.com/sagearbor/research-agent-skills",
+      "keywords": [
+        "skills",
+        "testing",
+        "telemetry",
+        "coaching",
+        "markdown",
+        "docx",
+        "lmstudio",
+        "token-ledger"
+      ],
       "category": "productivity"
     }
   ]
