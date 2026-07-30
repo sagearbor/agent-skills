@@ -10,7 +10,7 @@
     {
       "name": "research-skills",
       "source": "./",
-      "description": "Self-authored skills, each shipping VERSION + deterministic fixture tests (run_tests.py) + passive per-model telemetry: agent-coach, md-convert, lmstudio-panel, llm-usage-ledger, meeting-canvas, sage-agent-tempo, pub-readiness-check, codex-security-scan. Convention documented in README.md.",
+      "description": "Self-authored skills, each shipping VERSION + deterministic fixture tests (run_tests.py) + passive per-model telemetry: agent-coach, md-convert, lmstudio-panel, llm-usage-ledger, meeting-canvas, sage-agent-tempo, pub-readiness-check, codex-security-scan, secret-guard. Convention documented in README.md.",
       "version": "1.0.0",
       "author": {
         "name": "sagearbor"
@@ -31,7 +31,11 @@
         "security",
         "sarif",
         "codex-security",
-        "vulnerability-scanning"
+        "vulnerability-scanning",
+        "secrets",
+        "gitleaks",
+        "pre-commit",
+        "credential-scanning"
       ],
       "category": "productivity"
     }

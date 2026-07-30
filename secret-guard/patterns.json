@@ -1,0 +1,142 @@
+{
+  "_comment": "Two rule kinds. SHAPE rules match an unmistakable credential format anywhere (AKIA\u2026, ghp_\u2026, PEM) \u2014 no context needed. ASSIGNMENT rules require the value to be ASSIGNED to a secret-named variable (NAME = VALUE), because mere co-occurrence of 'token' and a long string on one line matches every authentication doc ever written \u2014 that produced 38k false positives in testing.",
+  "rules": [
+    {
+      "id": "private-key-pem",
+      "desc": "PEM private key block",
+      "regex": "-----BEGIN[ A-Z]{0,20}PRIVATE KEY-----",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "aws-access-key-id",
+      "desc": "AWS access key id",
+      "regex": "\\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\\b",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "github-pat-classic",
+      "desc": "GitHub personal access token",
+      "regex": "\\bgh[pousr]_[A-Za-z0-9]{36,}\\b",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "github-pat-fine",
+      "desc": "GitHub fine-grained token",
+      "regex": "\\bgithub_pat_[A-Za-z0-9_]{50,}\\b",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "slack-token",
+      "desc": "Slack token",
+      "regex": "\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "anthropic-key",
+      "desc": "Anthropic API key",
+      "regex": "\\bsk-ant-[A-Za-z0-9_\\-]{20,}\\b",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "openai-key",
+      "desc": "OpenAI API key",
+      "regex": "\\bsk-(?:proj-)?[A-Za-z0-9_\\-]{32,}\\b",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "google-api-key",
+      "desc": "Google API key",
+      "regex": "\\bAIza[0-9A-Za-z_\\-]{35}\\b",
+      "needs_name": false,
+      "kind": "shape"
+    },
+    {
+      "id": "azure-key-hex32",
+      "desc": "Azure Cognitive Services / OpenAI key (32 hex)",
+      "regex": "[a-f0-9]{32}",
+      "kind": "assignment"
+    },
+    {
+      "id": "azure-key-long",
+      "desc": "Azure AI Foundry style long key",
+      "regex": "[A-Za-z0-9]{70,100}",
+      "min_entropy": 3.8,
+      "kind": "assignment",
+      "require_mixed": true
+    },
+    {
+      "id": "generic-secret-assignment",
+      "desc": "High-entropy value assigned to a secret-named variable",
+      "regex": "[A-Za-z0-9_\\-+/=]{24,}",
+      "min_entropy": 4.2,
+      "kind": "assignment",
+      "require_mixed": true
+    },
+    {
+      "id": "connection-string-password",
+      "desc": "Password embedded in a connection URL",
+      "regex": "://[^\\s:@/]{1,64}:[^\\s:@/]{6,}@",
+      "needs_name": false,
+      "kind": "shape"
+    }
+  ],
+  "name_context": "(?i)(api[_\\-]?key|apikey|secret|token|password|passwd|pwd|credential|access[_\\-]?key|private[_\\-]?key|client[_\\-]?secret|sas|connection[_\\-]?string|auth)",
+  "placeholder_markers": [
+    "your_",
+    "your-",
+    "yourkey",
+    "example",
+    "placeholder",
+    "changeme",
+    "change_me",
+    "replace",
+    "redacted",
+    "dummy",
+    "sample",
+    "insert",
+    "todo",
+    "fixme",
+    "xxxx",
+    "<",
+    ">",
+    "abc123",
+    "test_key",
+    "fake",
+    "notreal",
+    "n/a",
+    "none",
+    "null",
+    "0000000000",
+    "1111111111",
+    "aaaaaaaaaa"
+  ],
+  "skip_path_markers": [
+    ".example",
+    "example.",
+    ".sample",
+    "sample.",
+    ".template",
+    "template.",
+    ".dist",
+    "/fixtures/",
+    "/__snapshots__/",
+    ".lock",
+    "package-lock.json",
+    "poetry.lock",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    "go.sum",
+    ".md:",
+    "CHANGELOG",
+    "/node_modules/"
+  ],
+  "assignment_prefix": "(?i)\\b[A-Za-z0-9_\\-\\.]*(?:api[_\\-]?key|apikey|secret|token|password|passwd|pwd|credential|access[_\\-]?key|private[_\\-]?key|client[_\\-]?secret|sas[_\\-]?token|connection[_\\-]?string|auth[_\\-]?token)[A-Za-z0-9_\\-\\.]*\\s*[:=]\\s*[\\\"'`]?"
+}

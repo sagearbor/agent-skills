@@ -28,3 +28,4 @@ Auto-rendered from `telemetry/*.jsonl` (append-only run ledgers; each skill's `r
 | meeting-canvas | 2026-07-26.1 | merge-check | 1 | 100% | 0.00±0.00s | 2026-07-28 |
 | sage-agent-tempo | 2026-07-26.1 | claude-fable-5 | 3 | 100% | 0.09±0.01s | 2026-07-28 |
 | sage-agent-tempo | 2026-07-26.1 | merge-check | 1 | 100% | 0.10±0.00s | 2026-07-28 |
+| secret-guard | 0.1.0 | claude-opus-5 | 5 | 100% | 1.97±0.06s | 2026-07-30 |
