@@ -48,6 +48,6 @@ enforced by CI, not by anyone watching a changelog:
 | **meeting-canvas** | 2026-07-26.1 | 8 | 2026-07-26 | Generate a fresh interactive meeting worksheet as a self-contained HTML canvas — a draggable/resizable Gantt r |
 | **pub-readiness-check** | 2026-07-26.1 | — | 2026-07-26 | Audit a repo for publication/grant readiness — confirms it has at least a stub of a future paper/manuscript AN |
 | **sage-agent-tempo** | 2026-07-26.1 | 5 | 2026-07-28 | Track what AI agents build, how long it takes, and what it costs |
-| **secret-guard** | 0.1.0 | 43 | — | Stop API keys, tokens, and passwords from ever reaching git |
+| **secret-guard** | 0.1.0 | 43 | 2026-07-30 | Stop API keys, tokens, and passwords from ever reaching git |
 
 <!-- SKILLS:END -->
