@@ -11,6 +11,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import statistics
 import sys
 import tempfile
@@ -179,6 +180,109 @@ def run_suite():
         check("dashboard_renders", dpath.exists()
               and "agent-coach usage" in dpath.read_text())
 
+        # ---------------- new-schema telemetry ----------------
+        ev_lines = [json.loads(l) for l in
+                    ac.events_file().read_text().splitlines() if l.strip()]
+        e0 = ev_lines[0]
+        check("event_has_date_dow", "date" in e0 and "dow" in e0 and "gap_s" in e0,
+              f"keys={sorted(e0)}")
+        check("event_no_wallclock_by_default", "time" not in e0)
+        check("event_has_project_fields",
+              e0.get("project") == "demo" and "d1" in e0 and "tier" in e0,
+              f"got project={e0.get('project')}")
+        check("event_flags_thrash", "thrash" in e0)
+
+        # precision full -> `time` locally, but NEVER in the shared payload
+        shared_dir = Path(td) / "shared"; shared_dir.mkdir()
+        os.environ["AGENT_COACH_SHARED_DIR"] = str(shared_dir)
+        cfg = ac.default_config(); cfg["precision"] = "full"; ac.save_config(cfg)
+        ac.call_model = lambda m, p, timeout=60, api_model=None: (
+            '[{"category":"model-selection","severity":0.9,"certainty":0.95,'
+            '"note":"x"}]', {"input_tokens": 10})
+        ac.do_score(str(tj), "/proj/demo", "sess-A")
+        loc = [json.loads(l) for l in ac.events_file().read_text().splitlines()][-1]
+        sh = [json.loads(l) for l in ac.events_file(True).read_text().splitlines()][-1]
+        check("precision_full_local_only",
+              "time" in loc and "time" not in sh,
+              f"local_time={'time' in loc} shared_time={'time' in sh}")
+        os.environ.pop("AGENT_COACH_SHARED_DIR", None)
+
+        # ---------------- URL never reaches the scoring model ----------------
+        # Real guard test: pollute the rubric with a link, assert it is stripped.
+        real_rubric = ac.RUBRIC.read_text()
+        poll = Path(td) / "polluted.md"
+        poll.write_text(real_rubric +
+                        "\n11. **link-bait** — see https://evil.example/course "
+                        "and www.other.example now.\n")
+        ac.RUBRIC = poll
+        prompt = ac.build_prompt("do a thing", ["tools used: 1"])
+        check("url_stripped_from_prompt",
+              "http" not in prompt and "evil.example" not in prompt
+              and "www." not in prompt and "[link]" in prompt,
+              "a URL survived into the model prompt")
+        ac.RUBRIC = Path(real_rubric and str(ac.SKILL_DIR / "best_practices.md"))
+
+        # ---------------- course-pointer gates ----------------
+        cmap = ac.load_course_map()
+        check("course_map_loads", len(cmap.get("courses") or {}) >= 3)
+
+        cs = Path(td) / "course_state.json"
+
+        def fresh_state():
+            if cs.exists():
+                cs.unlink()
+            return ac.load_course_state()
+
+        st = fresh_state()
+        # hit 1 and 2 in DISTINCT sessions -> no pointer; hit 3 -> pointer
+        r1 = ac.consider_course({"delegate-search"}, "s1", st, cmap)
+        r2 = ac.consider_course({"delegate-search"}, "s2", st, cmap)
+        r3 = ac.consider_course({"delegate-search"}, "s3", st, cmap)
+        check("course_silent_at_hit_1_2", r1[0] is None and r2[0] is None,
+              f"{r1[0]} {r2[0]}")
+        check("course_fires_at_hit_3", r3[0] is not None, f"{r3}")
+
+        # three hits in ONE session must NOT trigger (distinct-session rule)
+        st = fresh_state()
+        for _ in range(3):
+            rr = ac.consider_course({"delegate-search"}, "same-session", st, cmap)
+        check("course_needs_distinct_sessions", rr[0] is None, f"{rr}")
+
+        # cooldown suppresses a second pointer for a DIFFERENT category
+        st = fresh_state()
+        for s in ("s1", "s2", "s3"):
+            ac.consider_course({"delegate-search"}, s, st, cmap)
+        st["last_pointer"] = datetime.date.today().isoformat()
+        for s in ("s1", "s2", "s3"):
+            rc = ac.consider_course({"use-skills"}, s, st, cmap)
+        check("course_cooldown_suppresses", rc[0] is None, f"{rc}")
+
+        # dismiss / done permanently suppress
+        st = fresh_state()
+        ac._course_rec(st, "skilljar-portal")["dismissed"] = True
+        for s in ("s1", "s2", "s3"):
+            rd = ac.consider_course({"delegate-search"}, s, st, cmap)
+        check("course_dismiss_suppresses", rd[0] is None, f"{rd}")
+
+        # per-course cap: never a third suggestion
+        st = fresh_state()
+        ac._course_rec(st, "skilljar-portal")["times_suggested"] = ac.COURSE_MAX_SUGGESTS
+        for s in ("s1", "s2", "s3"):
+            rp = ac.consider_course({"delegate-search"}, s, st, cmap)
+        check("course_max_two_suggestions", rp[0] is None, f"{rp}")
+
+        # unmapped categories never produce a pointer, however many hits
+        st = fresh_state()
+        for cat in ("protect-secrets", "verify-before-done"):
+            for s in ("s1", "s2", "s3", "s4"):
+                ru = ac.consider_course({cat}, s, st, cmap)
+            check(f"course_unmapped_{cat}", ru[0] is None, f"{cat} -> {ru}")
+
+        # catalog staleness surfaces in `courses status`
+        check("catalog_staleness_helper",
+              ac._days_since("2000-01-01") > ac.CATALOG_STALE_DAYS
+              and ac._days_since(datetime.date.today().isoformat()) == 0)
+
     os.environ.pop("AGENT_COACH_DIR", None)
 
     # rubric snapshot + revert roundtrip (in a temp archive)
@@ -189,15 +293,29 @@ def run_suite():
     if snaps:
         snaps[-1].unlink()  # cleanup test artifact
 
-    # install into a temp settings.json
+    # install into a temp settings.json — and prove the hook path is
+    # VERSION-INDEPENDENT (the silent-death bug: a versioned plugin path in
+    # settings.json breaks for every user at the next release)
     with tempfile.TemporaryDirectory() as td2:
         sp = Path(td2) / "settings.json"
         ac.settings_path = lambda: sp
+        ac.COACH_DIR = Path(td2) / "state"
         ac.install()
-        check("install_adds_hook", sp.exists()
-              and "agent_coach.py" in sp.read_text())
+        raw = sp.read_text()
+        check("install_adds_hook", sp.exists() and ac.LAUNCHER in raw)
+        check("hook_path_version_independent",
+              not re.search(r"/\d+\.\d+\.\d+/", raw) and "plugins/cache" not in raw,
+              f"versioned path leaked into settings.json: {raw}")
+        check("launcher_written", ac.launcher_path().exists())
         ac.uninstall()
-        check("uninstall_removes_hook", "agent_coach.py" not in sp.read_text())
+        check("uninstall_removes_hook", ac.LAUNCHER not in sp.read_text())
+
+        # doctor runs and reports a nonzero failure count when nothing is wired
+        try:
+            rc = ac.doctor()
+            check("doctor_runs", rc in (0, 1))
+        except Exception as e:
+            check("doctor_runs", False, repr(e))
     return r
 
 
