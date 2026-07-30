@@ -1,0 +1,18 @@
+codex-security-scan (skill)
+Copyright (c) 2026 Sage Arbor
+
+This skill DRIVES, but does not redistribute, the following work:
+
+  Codex Security  —  https://github.com/openai/codex-security
+  Copyright (c) OpenAI
+  Licensed under the Apache License, Version 2.0
+  http://www.apache.org/licenses/LICENSE-2.0
+
+The upstream package (@openai/codex-security) is fetched from the public npm
+registry at runtime into a local cache directory. No upstream source, prose,
+schema, or script is copied into this repository. Upstream's methodology files
+are read in place from that cache.
+
+This skill is not affiliated with, sponsored by, or endorsed by OpenAI. It is
+an independent adapter that lets a non-OpenAI agent follow the published
+Codex Security methodology.

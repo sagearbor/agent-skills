@@ -1,0 +1,119 @@
+name: upstream-drift
+
+# The maintenance deal for codex-security-scan: nobody watches upstream.
+# Weekly we run the contract test against @openai/codex-security@latest.
+#   contract breaks  -> open (or update) an issue naming the broken assumption
+#   contract holds
+#     and latest > pinned -> open a PR bumping UPSTREAM_PIN
+#     and latest == pinned -> do nothing
+on:
+  schedule:
+    - cron: "0 13 * * 1"   # Mondays 13:00 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "codex-security-scan/**"
+      - ".github/workflows/upstream-drift.yml"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+
+      - name: Offline suite must pass first
+        run: python3 codex-security-scan/tests/run_tests.py --model github-ci
+
+      - name: Contract test against @latest
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 codex-security-scan/tests/contract_test.py \
+            --version latest --json | tee /tmp/contract.json
+
+      - name: Summarise
+        id: sum
+        run: |
+          PINNED=$(cat codex-security-scan/UPSTREAM_PIN)
+          LATEST=$(python3 -c "import json;print(json.load(open('/tmp/contract.json'))['upstreamVersion'])" 2>/dev/null || echo unknown)
+          NFAIL=$(python3 -c "import json;print(len(json.load(open('/tmp/contract.json'))['failures']))" 2>/dev/null || echo -1)
+          echo "pinned=$PINNED"  >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST"  >> "$GITHUB_OUTPUT"
+          echo "nfail=$NFAIL"    >> "$GITHUB_OUTPUT"
+          {
+            echo "### codex-security-scan upstream drift"
+            echo "pinned \`$PINNED\` · latest \`$LATEST\` · failures \`$NFAIL\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---- contract broke: tell a human, once ----------------------------
+      - name: Open / update drift issue
+        if: steps.sum.outputs.nfail != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.sum.outputs.latest }}
+          PINNED: ${{ steps.sum.outputs.pinned }}
+        run: |
+          BODY=$(mktemp)
+          {
+            echo "\`@openai/codex-security@$LATEST\` breaks assumptions that"
+            echo "\`codex-security-scan\` (pinned \`$PINNED\`) relies on."
+            echo
+            echo "Users are **not** broken — the skill still installs the pinned version."
+            echo "This needs a deliberate update before the pin moves."
+            echo
+            echo "#### Broken assumptions"
+            echo '```json'
+            python3 -c "import json;print(json.dumps(json.load(open('/tmp/contract.json'))['failures'],indent=2))" 2>/dev/null || echo '{"error":"contract test did not produce JSON"}'
+            echo '```'
+            echo
+            echo "Reproduce: \`python3 codex-security-scan/tests/contract_test.py --version latest\`"
+            echo
+            echo "_Filed by the upstream-drift workflow._"
+          } > "$BODY"
+          EXISTING=$(gh issue list --label upstream-drift --state open \
+            --json number --jq '.[0].number' 2>/dev/null || true)
+          gh label create upstream-drift --color d03b3b \
+            --description "codex-security-scan vs upstream" 2>/dev/null || true
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY"
+          else
+            gh issue create --label upstream-drift \
+              --title "codex-security-scan: upstream $LATEST breaks the contract" \
+              --body-file "$BODY"
+          fi
+
+      # ---- contract holds and upstream moved: offer the bump -------------
+      - name: Open pin-bump PR
+        if: steps.sum.outputs.nfail == '0' && steps.sum.outputs.latest != steps.sum.outputs.pinned && steps.sum.outputs.latest != 'unknown'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.sum.outputs.latest }}
+          PINNED: ${{ steps.sum.outputs.pinned }}
+        run: |
+          BRANCH="chore/codex-security-pin-$LATEST"
+          git config user.name "drift-bot"
+          git config user.email "actions@github.com"
+          git fetch origin "$BRANCH" && git checkout "$BRANCH" || git checkout -b "$BRANCH"
+          echo "$LATEST" > codex-security-scan/UPSTREAM_PIN
+          git add codex-security-scan/UPSTREAM_PIN
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(codex-security-scan): pin upstream $PINNED -> $LATEST"
+          git push -u origin "$BRANCH"
+          gh pr create --fill --head "$BRANCH" \
+            --title "chore(codex-security-scan): pin upstream $LATEST" \
+            --body "The full contract test passes against \`@openai/codex-security@$LATEST\` (was \`$PINNED\`), including the end-to-end scan lifecycle. Safe to merge." \
+            2>/dev/null || echo "PR already open"
+
+      - name: Fail the run if the contract broke
+        if: steps.sum.outputs.nfail != '0'
+        run: exit 1
