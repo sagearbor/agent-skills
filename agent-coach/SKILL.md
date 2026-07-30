@@ -14,10 +14,18 @@ haven't.
 
 ## Enable (one time)
 ```
-python3 ~/.claude/skills/agent-coach/agent_coach.py install
+python3 <this-skill-dir>/agent_coach.py install
 # restart Claude Code
+python3 <this-skill-dir>/agent_coach.py doctor    # confirm it's actually wired
 ```
 Uninstall: `agent_coach.py uninstall`.
+
+`install` writes a **version-independent launcher** to `~/.agent-coach/coach_hook.py`
+and points `settings.json` at *that*, never at a versioned plugin path. Plugin
+installs live under `.../research-skills/<version>/agent-coach/`, so baking that
+path into `settings.json` would silently kill the hook for every user at the next
+release — no error, coaching just stops. `doctor` detects that state (including
+legacy installs that still carry a versioned path) and tells you the fix.
 
 ## Tune it (natural language works — the model runs these for you)
 | Command | Effect |
@@ -30,6 +38,41 @@ Uninstall: `agent_coach.py uninstall`.
 | `agent_coach.py budget <daily-$\|off>` | OPTIONAL daily spend cap (off by default; pauses scoring once hit) |
 | `agent_coach.py frequency <n>` | score every Nth turn (1 = every turn); overrides the auto-ramp |
 | `agent_coach.py dashboard [out.html]` | usage rollup (aggregates `$AGENT_COACH_SHARED_DIR` too) |
+| `agent_coach.py doctor` | health check — is the hook actually firing? |
+| `agent_coach.py precision date\|full` | `full` adds wall-clock time to the **local** log only |
+| `agent_coach.py project <D1-code\|poc\|skip\|show>` | tag this repo (asked once, at 25 turns) |
+| `agent_coach.py ask-after <n>` | change that 25-turn threshold |
+
+## Training pointers (`courses`)
+When the **same** habit is missed repeatedly across **distinct sessions**, the
+coach points at one specific course instead of only the micro-fix.
+
+| Command | Effect |
+|---|---|
+| `courses status` | gates, hits per category, per-course state, catalog age |
+| `courses preview <category>` | render the note exactly as a user sees it — **changes no state** |
+| `courses on` / `off` | course pointers only (micro-fixes unaffected) |
+| `courses done <id\|category>` | "already took this" → permanent suppress |
+| `courses dismiss <id>` | "not interested" → permanent suppress |
+| `courses snooze <days>` | pause all course pointers |
+| `courses min-hits <n>` / `cooldown <days>` | tune the two gates |
+| `courses watch on` | opt in to "new modules published" news (max 1×/30d) |
+| `courses share on` | opt in to sending course events to the org dir (**off** by default) |
+| `courses refresh` | re-verify every URL by real HTTP fetch |
+
+**Gates** (on top of the normal severity threshold): ≥3 hits across **distinct
+sessions**, one pointer per **7 days** globally, **2 suggestions max** per course
+ever, hard stop on dismiss/done.
+
+**Links can never be hallucinated.** `course_map.json` is never sent to the
+scoring model — rule text is URL-stripped on the way in (`URL_RE`). The model
+decides *whether* a habit was missed; Python decides *what* link to render; and a
+course is only suggested if its last real HTTP fetch returned **200**. `courses
+refresh` re-checks and stamps `verified_on`; `doctor` warns past 180 days.
+
+**Deliberately unmapped:** `protect-secrets` (the inline warning is the right
+response), `verify-before-done`, `avoid-thrash`, `small-batches` (no honest free
+course teaches these — a wrong pointer costs more credibility than a missing one).
 
 ## The rubric
 `best_practices.md` — the teachable list, also the scoring rubric. Edit it to
@@ -43,11 +86,36 @@ fires when `severity ≥ threshold[category]`. If `escalation_cutoff > 0`, only
 false positive gets killed before it reaches the user, and you can dial
 quality-vs-cost independently of annoyance.
 
-## Org rollup (optional, zero manual effort)
+## Org rollup — exactly what is and isn't shared
 Every coaching decision is logged to a per-user JSONL (`~/.agent-coach/`). Set
 `AGENT_COACH_SHARED_DIR=/path/on/shared/drive` and each user writes their own
 file there (per-user filenames → no write collisions) — then
 `agent_coach.py dashboard` renders an instant usage chart across everyone.
+
+**Shared** (usernames in plain text — deliberate, this is an onboarding
+programme, not anonymous research):
+
+| Field | Why |
+|---|---|
+| `date`, `dow` | weekend/weekday patterns |
+| `gap_s` | seconds since your previous scored turn — **burst analysis without a wall clock** |
+| `user`, `machine` | who to help |
+| `project`, `d1`, `tier`, `repo` | per-project token variance (the "same budget, 20× the spend" question) |
+| `fired`, `scored`, `thrash` | the actual coaching product |
+| `usage` | per-person / per-project cost |
+
+**Never shared:**
+- `time` (wall-clock). Enabled locally by `precision full`; hard-stripped from the
+  shared payload. Analyse your own night-work locally and present the *finding* —
+  the raw rows never have to leave your laptop.
+- **Course-pointer events**, unless you explicitly run `courses share on`. Training
+  completion is tied to raises and assignments, so a shared list of who keeps being
+  told to take a course is a de facto competency ranking. Off by default.
+
+**Tokens are activity, not productivity.** The dashboard reports "effort turns"
+with `avoid-thrash`-flagged turns *subtracted*, because thrashing produces high
+token counts and no output. Pair with merged PRs or days-to-done before drawing
+any conclusion about a person.
 
 ## Rule 0 (telemetry)
 Once per session run

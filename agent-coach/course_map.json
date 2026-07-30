@@ -1,0 +1,83 @@
+{
+ "_comment": "HUMAN-EDITED. This file is NEVER sent to the scoring model \u2014 the model decides WHETHER a habit was missed, agent_coach.py decides WHAT link to render. Run `agent_coach.py courses refresh` to re-verify: a course is only ever suggested if its last fetch returned HTTP 200.",
+ "verified_on": "2026-07-30",
+ "sources": {
+  "coursera_partner": "https://www.coursera.org/partners/anthropic",
+  "skilljar": "https://anthropic.skilljar.com/"
+ },
+ "credit_policy": "Coursera completions auto-report into Duke's training record ('auto'). Skilljar and DeepLearning.AI give a PDF certificate that must be logged by hand ('manual'). Prefer auto where both exist.",
+ "courses": {
+  "coursera-intro-claude-code": {
+   "title": "Vibe Coding with Claude Code (was: Introduction to Claude Code)",
+   "provider": "Coursera",
+   "url": "https://www.coursera.org/learn/introduction-to-claude-code",
+   "credit": "auto",
+   "verified": true,
+   "last_status": 200,
+   "fetched_title": "Vibe Coding with Claude Code | Coursera"
+  },
+  "coursera-claude-api": {
+   "title": "Building with the Claude API",
+   "provider": "Coursera",
+   "url": "https://www.coursera.org/learn/building-with-the-claude-api",
+   "credit": "auto",
+   "verified": true,
+   "last_status": 200,
+   "fetched_title": "Building with the Claude API | Coursera"
+  },
+  "skilljar-portal": {
+   "title": "Anthropic Academy (Agent Skills, Subagents, AI Fluency)",
+   "provider": "Anthropic Skilljar",
+   "url": "https://anthropic.skilljar.com/",
+   "credit": "manual",
+   "verified": true,
+   "last_status": 200,
+   "fetched_title": "Anthropic Courses"
+  },
+  "dlai-agent-skills": {
+   "title": "Agent Skills with Anthropic",
+   "provider": "DeepLearning.AI",
+   "url": "https://www.deeplearning.ai/courses/agent-skills-with-anthropic",
+   "credit": "manual",
+   "verified": true,
+   "last_status": 200,
+   "fetched_title": "Agent Skills with Anthropic - DeepLearning.AI"
+  },
+  "dlai-mcp": {
+   "title": "MCP: Build Rich-Context AI Apps with Anthropic",
+   "provider": "DeepLearning.AI",
+   "url": "https://www.deeplearning.ai/courses/mcp-build-rich-context-ai-apps-with-anthropic",
+   "credit": "manual",
+   "verified": true,
+   "last_status": 200,
+   "fetched_title": "MCP: Build Rich-Context AI Apps with Anthropic - DeepLearning.AI"
+  }
+ },
+ "categories": {
+  "plan-first": [
+   "coursera-intro-claude-code"
+  ],
+  "fresh-context": [
+   "coursera-intro-claude-code"
+  ],
+  "model-selection": [
+   "coursera-intro-claude-code"
+  ],
+  "use-skills": [
+   "dlai-agent-skills",
+   "skilljar-portal"
+  ],
+  "delegate-search": [
+   "skilljar-portal"
+  ],
+  "clear-prompt": [
+   "skilljar-portal"
+  ],
+  "_unmapped_by_design": {
+   "protect-secrets": "The inline warning IS the right response. No course needed.",
+   "verify-before-done": "Nearest honest fit is AI evals training; the strong one is paid (Maven). A wrong pointer costs more credibility than a missing one.",
+   "avoid-thrash": "No honest Anthropic/Coursera course teaches this specifically.",
+   "small-batches": "No honest Anthropic/Coursera course teaches this specifically."
+  }
+ }
+}
