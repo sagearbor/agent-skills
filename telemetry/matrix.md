@@ -9,6 +9,7 @@ Auto-rendered from `telemetry/*.jsonl` (append-only run ledgers; each skill's `r
 | agent-coach | 0.1.0 | claude-fable-5 | 1 | 100% | 0.02±0.00s | 2026-07-28 |
 | agent-coach | 0.2.0 | claude-fable-5 | 1 | 100% | 0.03±0.00s | 2026-07-28 |
 | agent-coach | 0.3.0 | claude-fable-5 | 3 | 97% | 0.03±0.00s | 2026-07-28 |
+| agent-coach | 0.3.0 | claude-opus-5 | 1 | 100% | 0.14±0.00s | 2026-07-30 |
 | agent-coach | 0.3.0 | merge-check | 1 | 100% | 0.03±0.00s | 2026-07-28 |
 | codex-security-scan | 0.1.0 | claude-opus-5 | 2 | 100% | 0.02±0.00s | 2026-07-29 |
 | llm-usage-ledger | 1.0.0 | merge-check | 1 | 100% | 0.21±0.00s | 2026-07-28 |
