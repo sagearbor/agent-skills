@@ -130,12 +130,12 @@ def default_config():
             "score_frequency": 1,       # 1 = every turn; N = every Nth
             "ramp_after": 3, "ramp_to": 5, "frequency_ramped": False,
             "turn": 0,
-            # The plugin ships the Stop hook (hooks/hooks.json), so wiring needs
-            # no setup command. But scoring COSTS MONEY per turn, and this skill
-            # rides in a 9-skill bundle — someone installing it for md-convert
-            # must not silently start paying for coaching. The hook is therefore
-            # inert until the user opts in, and says so exactly once.
-            "activated": False,
+            # The plugin ships the Stop hook (hooks/hooks.json), so installing
+            # the plugin IS the install — no setup command. Default ON: if you
+            # installed it you want it, and "type this shell command to start"
+            # is friction nobody remembers. Every coaching note carries a
+            # one-line `/agent-coach off` footer, and turn one says so plainly.
+            "activated": True,
             "first_run_notice": False,
             "precision": "date",        # "full" adds wall-clock time LOCALLY only
             "ask_after": ASK_AFTER_DEFAULT,
@@ -160,7 +160,7 @@ def load_config():
     cfg.setdefault("precision", "date")
     cfg.setdefault("ask_after", ASK_AFTER_DEFAULT)
     cfg.setdefault("last_event_epoch", None)
-    cfg.setdefault("activated", False)
+    cfg.setdefault("activated", True)
     cfg.setdefault("first_run_notice", False)
     return cfg
 
@@ -557,6 +557,8 @@ def format_note(fired, extra=None):
         body.append(f" ● {f['category']}{tag}\n   {f['note']}")
     if extra:
         body.append(extra)
+    if body:
+        body.append(OFF_FOOTER)
     return "\n".join([BANNER, *body, BANNER_END])
 
 
@@ -641,14 +643,17 @@ def log_event(ev, course_event=None, share_courses=False):
 
 FIRST_RUN_NOTICE = "\n".join([
     BANNER,
-    " ● agent-coach is installed but OFF",
-    "   It can score each finished turn and coach you on how you're driving",
-    "   the agent — model choice, plan-first, verifying, avoiding thrash.",
-    "   Cost: roughly a tenth of a cent per scored turn (one small Haiku call).",
+    " ● agent-coach is ON",
+    "   After each finished turn it makes one small extra Haiku call to check",
+    "   how you're driving the agent — model choice, plan-first, verifying,",
+    "   avoiding thrash — and shows a short note when something's worth fixing.",
+    "   That's an ADDITIONAL model call per turn, not just extra context.",
     "",
-    "   Turn it on:        agent_coach.py on",
-    "   Never ask again:   agent_coach.py off",
+    "   Stop it:      /agent-coach off",
+    "   Less often:   /agent-coach quieter",
     BANNER_END])
+
+OFF_FOOTER = "   ─ /agent-coach off to stop · /agent-coach quieter to soften"
 
 PENDING = lambda: COACH_DIR / "pending_note.txt"  # noqa: E731
 
@@ -673,13 +678,17 @@ def run_hook(stdin_data):
                 out = {"systemMessage": note}
         except OSError:
             pass
-    # Not opted in yet: never spawn a scorer (zero cost), but say so once.
-    if not cfg.get("activated", False):
-        if not cfg.get("first_run_notice", False):
-            cfg["first_run_notice"] = True
-            save_config(cfg)
-            if not out:
-                out = {"systemMessage": FIRST_RUN_NOTICE}
+    # Exactly once, on the first turn after install, say what this thing is and
+    # how to stop it. Default is ON, so this is a notification, not a request.
+    if not cfg.get("first_run_notice", False):
+        cfg["first_run_notice"] = True
+        save_config(cfg)
+        prior = out.get("systemMessage")
+        out = {"systemMessage": (prior + "\n" + FIRST_RUN_NOTICE) if prior
+               else FIRST_RUN_NOTICE}
+
+    # Turned off: never spawn a scorer — one file read, then exit. Zero cost.
+    if not cfg.get("activated", True):
         return out
 
     tp = (stdin_data or {}).get("transcript_path")
@@ -1331,13 +1340,13 @@ def main(argv=None):
         save_config(cfg); print(f"all thresholds {'raised' if step > 0 else 'lowered'} 0.1")
     elif a.cmd == "off":
         cfg["enabled"] = False; cfg["first_run_notice"] = True
-        save_config(cfg); print("agent-coach silenced (on to restore)")
+        save_config(cfg); print("agent-coach silenced — /agent-coach on to restore")
     elif a.cmd == "on":
         cfg["enabled"] = True; cfg["activated"] = True
         cfg["first_run_notice"] = True
         save_config(cfg)
         print("agent-coach ON — scoring starts next turn (~0.1 cents/turn).")
-        print("Notes appear one turn later by design. Check with: agent_coach.py doctor")
+        print("Notes appear one turn later by design. Check with: /agent-coach status")
     elif a.cmd == "escalate":
         cfg["escalation_cutoff"] = max(0.0, min(1.0, a.cutoff)); save_config(cfg)
         print(f"escalation_cutoff -> {cfg['escalation_cutoff']:.2f} "

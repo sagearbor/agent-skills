@@ -12,31 +12,38 @@ thresholds that start low (heavy coaching for a beginner) and **auto-raise as
 each habit improves**, so it fades where you've learned and persists where you
 haven't.
 
-## Enable — nothing to install
-The plugin ships the Stop hook itself (`hooks/hooks.json`, resolved via
+## Enable — nothing to install, on by default
+The plugin ships the Stop hook itself (`hooks/hooks.json` via
 `${CLAUDE_PLUGIN_ROOT}`), so installing the plugin IS the wiring. No setup
 command, and nothing to redo when a new version ships.
 
-It is **off until you opt in**, because scoring costs money per turn and this
-skill rides in a multi-skill bundle — somebody installing it for `md-convert`
-must not silently start paying for coaching. On your first turn after install
-you get one notice, then silence:
+It is **on by default** — if you installed it, you want it — and every control
+is a slash command, so nobody has to remember a shell path:
 
 ```
- ● agent-coach is installed but OFF
-   Cost: roughly a tenth of a cent per scored turn (one small Haiku call).
-   Turn it on:        agent_coach.py on
-   Never ask again:   agent_coach.py off
+/agent-coach off        stop it
+/agent-coach quieter    same coach, fires less
+/agent-coach status     is it on, is it actually firing
+/agent-coach dashboard  render + open your usage page
 ```
 
-Until you run `on`, the hook does one file read and exits — no model call, no
-cost. `off` records the decline and never asks again.
+Turn one after install prints a single notice saying it's on and how to stop.
+Every coaching note after that carries a one-line footer with the same. Once
+off, the hook does one file read and exits — no model call, no cost.
 
-**Direct-clone users** (no marketplace) still need `agent_coach.py install`,
-which writes a **version-independent launcher** to `~/.agent-coach/coach_hook.py`
-and points `settings.json` at that — never at a versioned plugin path, which
-would silently die at the next release. `doctor` accepts either route and tells
-you which one is active.
+**What it costs, honestly.** Unlike a normal skill, which only adds text to
+calls you were already making, agent-coach fires **one additional model call per
+finished turn**. With an `ANTHROPIC_API_KEY` set that's a direct Haiku call —
+roughly 700 input tokens, ~100 out, a fraction of a cent. Without a key it
+shells out to `claude -p`, which spends **subscription allowance** rather than
+dollars, and costs more per turn because Claude Code re-sends its own system
+prompt. Only substantive turns are scored, and after turn 3 it drops to every
+5th turn automatically.
+
+**Direct-clone users** (no marketplace) still run `agent_coach.py install`, which
+writes a version-independent launcher to `~/.agent-coach/coach_hook.py` rather
+than a versioned plugin path that would silently die at the next release.
+`doctor` accepts either route and says which is active.
 
 ## Tune it (natural language works — the model runs these for you)
 | Command | Effect |
