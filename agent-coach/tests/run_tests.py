@@ -320,6 +320,63 @@ def run_suite():
         ac.http_ok = _real_http
         ac.COURSE_MAP = real_map
 
+        # ---------------- A/B variant B extraction ----------------
+        abj = Path(td) / "ab.jsonl"
+        abj.write_text("\n".join(json.dumps(x) for x in [
+            {"type": "user", "message": {"content": "cBoth do a thing"}},
+            {"type": "assistant", "message": {"model": "claude-opus-5", "content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "grep -r x ."}},
+                {"type": "text", "text": 'ok\n<coach-self>[{"category":"delegate-search",'
+                 '"severity":0.7,"certainty":0.8,"note":"n"}]</coach-self>'}]}}]))
+        b = ac.extract_self_scores(str(abj))
+        check("ab_extracts_self_block",
+              b and len(b) == 1 and b[0]["category"] == "delegate-search", f"got {b}")
+
+        # no block -> None, NOT an empty list (silence and "nothing to flag"
+        # are different findings in the comparison)
+        noj = Path(td) / "noab.jsonl"
+        noj.write_text("\n".join(json.dumps(x) for x in [
+            {"type": "user", "message": {"content": "hi"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "no block here"}]}}]))
+        check("ab_absent_block_is_none", ac.extract_self_scores(str(noj)) is None)
+
+        # a stale block from an EARLIER turn must not be picked up
+        stalej = Path(td) / "stale.jsonl"
+        stalej.write_text("\n".join(json.dumps(x) for x in [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": '<coach-self>[{"category":"use-skills",'
+                 '"severity":0.9,"certainty":0.9,"note":"old"}]</coach-self>'}]}},
+            {"type": "user", "message": {"content": "next turn"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "no block this time"}]}}]))
+        check("ab_ignores_stale_earlier_block",
+              ac.extract_self_scores(str(stalej)) is None,
+              "picked up a block from a previous turn")
+
+        # bogus categories are filtered exactly like variant A's output
+        badj = Path(td) / "bad.jsonl"
+        badj.write_text(json.dumps(
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": '<coach-self>[{"category":"made-up",'
+                 '"severity":1,"certainty":1,"note":"x"}]</coach-self>'}]}}))
+        check("ab_filters_bogus_category", ac.extract_self_scores(str(badj)) == [])
+
+        # the injector stays silent unless armed
+        import subprocess as _sp2
+        inj = str(ac.SKILL_DIR / "ab_inject.py")
+        env = dict(os.environ, AGENT_COACH_DIR=str(td))
+        off = _sp2.run(["python3", inj], input=json.dumps({"prompt": "hello"}),
+                       capture_output=True, text=True, env=env)
+        check("ab_injector_silent_when_off", off.stdout.strip() == "",
+              f"emitted {off.stdout[:80]!r}")
+        on = _sp2.run(["python3", inj], input=json.dumps({"prompt": "cBoth please"}),
+                      capture_output=True, text=True, env=env)
+        check("ab_injector_fires_on_cboth",
+              "<coach-self>" in on.stdout and "RUBRIC:" in on.stdout)
+        check("ab_injector_strips_urls", "http" not in on.stdout,
+              "a URL reached the main model's context")
+
         # catalog staleness surfaces in `courses status`
         check("catalog_staleness_helper",
               ac._days_since("2000-01-01") > ac.CATALOG_STALE_DAYS

@@ -25,6 +25,8 @@ Then map `$ARGUMENTS` to a subcommand:
 | `status`, (empty) | `<script> status` then `<script> doctor` | ON/OFF, thresholds, whether it is actually firing |
 | `quieter` / `louder` | `<script> quieter` / `louder` | all thresholds nudged |
 | `dashboard` | `<script> dashboard ~/coach.html` then `open ~/coach.html` | where the file is |
+| `ab` | `<script> ab` | side-by-side A/B tally: separate-call vs same-call coaching |
+| `ab on` / `ab off` | `<script> ab on|off` | arm/disarm the comparison |
 | `courses` + anything | `<script> courses <rest>` | pass through verbatim |
 | `project` + a code | `<script> project <code>` — run it **from the user's current directory** | which repo got tagged |
 | anything else | `<script> --help` | list the real subcommands |

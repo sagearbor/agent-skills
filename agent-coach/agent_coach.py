@@ -136,6 +136,7 @@ def default_config():
             # is friction nobody remembers. Every coaching note carries a
             # one-line `/coach off` footer, and turn one says so plainly.
             "activated": True,
+            "ab_mode": False,   # "cBoth" arms the A/B comparison
             "first_run_notice": False,
             "precision": "date",        # "full" adds wall-clock time LOCALLY only
             "ask_after": ASK_AFTER_DEFAULT,
@@ -161,6 +162,7 @@ def load_config():
     cfg.setdefault("ask_after", ASK_AFTER_DEFAULT)
     cfg.setdefault("last_event_epoch", None)
     cfg.setdefault("activated", True)
+    cfg.setdefault("ab_mode", False)
     cfg.setdefault("first_run_notice", False)
     return cfg
 
@@ -264,6 +266,32 @@ def session_id_from(transcript_path):
         return Path(transcript_path).stem
     except Exception:
         return "unknown"
+
+
+SELF_RE = re.compile(r"<coach-self>\s*(\[.*?\])\s*</coach-self>", re.S)
+
+
+def extract_self_scores(transcript_path):
+    """Variant B's answer: the block the responding model emitted in its own
+    reply. Read from the LAST assistant message only, so an older turn's block
+    can't be mistaken for this one's."""
+    try:
+        lines = [json.loads(l) for l in Path(transcript_path).read_text(
+            errors="replace").splitlines() if l.strip()]
+    except (OSError, json.JSONDecodeError):
+        return None
+    for e in reversed(lines):
+        if e.get("type") != "assistant":
+            continue
+        c = (e.get("message") or {}).get("content")
+        text = c if isinstance(c, str) else " ".join(
+            b.get("text", "") for b in (c or [])
+            if isinstance(b, dict) and b.get("type") == "text")
+        m = SELF_RE.search(text or "")
+        if m:
+            return parse_scores(m.group(1))
+        return None      # newest assistant turn had no block — B stayed silent
+    return None
 
 
 def extract_last_turn(transcript_path):
@@ -794,6 +822,41 @@ def do_score(transcript_path, cwd, session=None):
     fired_cats = {f["category"] for f in fired}
     update_dynamic(cfg, fired_cats)
 
+    # ---- A/B: variant B rode along in the turn the user already paid for
+    ab_extra = None
+    if cfg.get("ab_mode"):
+        b_scores = extract_self_scores(transcript_path)
+        b_fired = [x for x in (b_scores or [])
+                   if x["severity"] >= cfg["thresholds"].get(
+                       x["category"], START_THRESHOLD)]
+        rec = {"date": datetime.date.today().isoformat(), "turn": cfg["turn"],
+               "session": session,
+               "a_fired": sorted(fired_cats),
+               "a_scored": [{"c": x["category"], "sev": round(x["severity"], 2)}
+                            for x in scores],
+               "a_cost_usd": round(usage_cost_usd(usage), 5),
+               "b_emitted": b_scores is not None,
+               "b_fired": sorted({x["category"] for x in b_fired}),
+               "b_scored": [{"c": x["category"], "sev": round(x["severity"], 2)}
+                            for x in (b_scores or [])],
+               "b_cost_usd": 0.0}
+        try:
+            f = COACH_DIR / "ab_log.jsonl"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            with open(f, "a") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        except OSError:
+            pass
+        a_txt = ", ".join(rec["a_fired"]) or "(nothing)"
+        if b_scores is None:
+            b_txt = "(no block emitted — B stayed silent or ignored the instruction)"
+        else:
+            b_txt = ", ".join(rec["b_fired"]) or "(nothing)"
+        ab_extra = ("   ── A/B ──\n"
+                    f"   A separate Haiku call: {a_txt}   (${rec['a_cost_usd']:.4f})\n"
+                    f"   B same-call self-check: {b_txt}   ($0.0000)\n"
+                    "   /coach ab for the tally · /coach ab off to stop")
+
     # ---- project tagging: ask once, only for repos that got busy
     proj = project_info(cwd)
     rt = cfg["repo_turns"]
@@ -834,7 +897,7 @@ def do_score(transcript_path, cwd, session=None):
     log_event(ev, course_event, st.get("share", False))
     save_config(cfg)
 
-    extras = "\n".join(x for x in (course_extra, watch_extra) if x)
+    extras = "\n".join(x for x in (course_extra, watch_extra, ab_extra) if x)
     if fired or extras:
         note = format_note(fired, extras or None)
     else:
@@ -1238,6 +1301,52 @@ def cmd_status(cfg):
     print("lower threshold = more coaching; 1.00 = silent. Auto-raises as you improve.")
 
 
+def cmd_ab(arg):
+    """Side-by-side tally. Agreement is the number that matters: if B matches A
+    most of the time, the separate call is not earning its ~2.3c/turn."""
+    cfg = load_config()
+    if arg in ("on", "off"):
+        cfg["ab_mode"] = (arg == "on"); save_config(cfg)
+        print(f"A/B comparison {'ON — both variants run each turn' if arg == 'on' else 'OFF'}")
+        return 0
+    f = COACH_DIR / "ab_log.jsonl"
+    rows = []
+    if f.exists():
+        for line in f.read_text().splitlines():
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    if not rows:
+        print("no A/B turns recorded yet. Say 'cBoth' in a prompt to arm it "
+              "(sticky until `/coach ab off`).")
+        return 0
+    agree = sum(1 for r in rows if set(r["a_fired"]) == set(r["b_fired"]))
+    b_silent = sum(1 for r in rows if not r["b_emitted"])
+    a_only = sum(1 for r in rows if set(r["a_fired"]) - set(r["b_fired"]))
+    b_only = sum(1 for r in rows if set(r["b_fired"]) - set(r["a_fired"]))
+    a_cost = sum(r.get("a_cost_usd", 0) for r in rows)
+    n = len(rows)
+    print(f"A/B over {n} scored turn(s)\n")
+    print(f"{'turn':>5}  {'A (separate Haiku call)':<34} {'B (same call, self-check)':<34}")
+    for r in rows[-12:]:
+        a = ", ".join(r["a_fired"]) or "—"
+        b = ("NO BLOCK" if not r["b_emitted"]
+             else ", ".join(r["b_fired"]) or "—")
+        print(f"{r['turn']:>5}  {a[:34]:<34} {b[:34]:<34}")
+    print(f"\nagree on what fired : {agree}/{n} ({agree * 100 // max(1, n)}%)")
+    print(f"A flagged, B missed : {a_only}")
+    print(f"B flagged, A missed : {b_only}")
+    print(f"B emitted no block  : {b_silent}/{n}  "
+          f"(B is unusable if this is high — it must return numbers)")
+    print(f"\ncost  A ${a_cost:.4f} total, ${a_cost / n:.4f}/turn   |   B $0.0000 "
+          f"(rides the call you already paid for)")
+    print(f"\nRead it this way: high agreement + low 'no block' => B is doing A's")
+    print("job for free. Frequent 'A flagged, B missed' => self-grading is")
+    print("softening criticism, which is the whole reason A exists.")
+    return 0
+
+
 def cmd_courses(a):
     st = load_course_state()
     cmap = load_course_map()
@@ -1335,6 +1444,7 @@ def main(argv=None):
     p = sub.add_parser("precision"); p.add_argument("mode", choices=["date", "full"])
     p = sub.add_parser("project"); p.add_argument("value")  # code | poc | skip | show
     p = sub.add_parser("ask-after"); p.add_argument("n", type=int)
+    p = sub.add_parser("ab"); p.add_argument("arg", nargs="?", default="report")
     p = sub.add_parser("courses")
     p.add_argument("sub", default="status", nargs="?")
     p.add_argument("arg", nargs="?")
@@ -1362,6 +1472,8 @@ def main(argv=None):
         return uninstall()
     if a.cmd == "doctor":
         return doctor()
+    if a.cmd == "ab":
+        return cmd_ab(a.arg)
     if a.cmd == "courses":
         return cmd_courses(a)
 

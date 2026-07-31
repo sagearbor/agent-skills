@@ -21,6 +21,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/agent-coach/ab_inject.py",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

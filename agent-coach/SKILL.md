@@ -70,6 +70,31 @@ than a versioned plugin path that would silently die at the next release.
 | `agent_coach.py project <D1-code\|poc\|skip\|show>` | tag this repo (asked once, at 25 turns) |
 | `agent_coach.py ask-after <n>` | change that 25-turn threshold |
 
+## A/B: is the separate call worth it? (`cBoth`)
+The shipped design spends a **separate** `claude -p` call per turn (~2.3c on a
+subscription — most users have no API key). The obvious alternative is to inject
+the rubric into the turn you are already paying for and let the responding model
+self-assess: free, no delay. The catch is that it grades its own homework, and
+it must return NUMBERS or the threshold/auto-raise/course machinery has nothing
+to gate on.
+
+Rather than argue, run both. Say **`cBoth`** in any prompt to arm it (sticky
+until `/coach ab off`). Each note then shows:
+
+```
+   ── A/B ──
+   A separate Haiku call: delegate-search, small-batches   ($0.0011)
+   B same-call self-check: delegate-search                 ($0.0000)
+```
+
+`/coach ab` prints the tally — agreement rate, what each caught that the other
+missed, how often B emitted no block at all, and cumulative cost.
+
+**How to read it.** High agreement + low "no block" means B is doing A's job for
+free, and the separate call should go. Frequent "A flagged, B missed" means
+self-grading is softening criticism — which is precisely why A exists.
+Variant B never sees a URL: rule text is stripped on the way in, same as A.
+
 ## Training pointers (`courses`)
 When the **same** habit is missed repeatedly across **distinct sessions**, the
 coach points at one specific course instead of only the micro-fix.
