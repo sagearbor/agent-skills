@@ -391,7 +391,43 @@ def build_prompt(user_text, summary):
         "Respond with ONLY a JSON array (possibly empty). Each item: "
         '{"category": "<one of the ids above>", "severity": 0.0-1.0, '
         '"certainty": 0.0-1.0, "note": "one actionable sentence"}. '
-        "severity = how big the missed opportunity; certainty = how sure you are.")
+        "severity = how big the missed opportunity; certainty = how sure you are."
+        "\n\nTHEN, on a final separate line, answer whether the user EXPLICITLY "
+        "asked how to learn or get better at something (\"how do I learn X\", "
+        "\"I want to understand X\", \"teach me X\"). This is not a mistake — it "
+        "is a request, and it is the best possible moment to point at training.\n"
+        "Write exactly:  LEARNING: <one of: " + ", ".join(topic_names()) +
+        ", none>\nUse none unless they actually asked to learn.")
+
+
+def topic_names():
+    return [k for k in (load_course_map().get("topics") or {})
+            if not k.startswith("_")]
+
+
+LEARN_RE = re.compile(r"^\s*LEARNING:\s*([a-z\-]+)", re.I | re.M)
+
+
+def parse_learning_topic(text):
+    m = LEARN_RE.search(text or "")
+    if not m:
+        return None
+    t = m.group(1).lower()
+    return t if t in topic_names() else None
+
+
+def topic_course(topic, cmap, st):
+    """First still-offerable course for an explicitly requested topic."""
+    for cid in (cmap.get("topics") or {}).get(topic, []):
+        c = (cmap.get("courses") or {}).get(cid)
+        if not c or not c.get("url") or not c.get("verified"):
+            continue
+        rec = _course_rec(st, cid)
+        if rec["dismissed"] or rec["completed"]:
+            continue
+        return cid, {**c, "category": f"training for {topic}",
+                     "id": cid, "asked": True}
+    return None, None
 
 
 SYS = ("You are a terse pair-programming coach. Output ONLY a JSON array as "
@@ -574,9 +610,12 @@ def format_course_note(course):
               "none": "free to take, but the certificate is paywalled — it "
                       "cannot count toward your training record"}.get(
         course.get("credit"), "credit status unknown")
+    asked = course.get("asked")
     return "\n".join([
-        f" ● {course['category']} — worth some training time",
-        f"   You've hit this in {COURSE_MIN_HITS}+ separate sessions.",
+        f" ● {course['category']}"
+        + ("" if asked else " — worth some training time"),
+        ("   You asked, so here it is — no nagging involved." if asked else
+         f"   You've hit this in {COURSE_MIN_HITS}+ separate sessions."),
         f"   {course.get('title', course['id'])} ({course.get('provider', '?')})",
         f"   {course.get('url', '')}",
         f"   Credit: {credit}",
@@ -870,7 +909,15 @@ def do_score(transcript_path, cwd, session=None):
     st = load_course_state()
     cmap = load_course_map()
     course_extra, course_event = None, None
-    cid, course = consider_course(fired_cats, session, st, cmap)
+    topic = parse_learning_topic(text)
+    cid = course = None
+    if topic:
+        # An explicit request is not a miss. min_hits and the 7-day cooldown
+        # exist to stop nagging; answering a direct question is not nagging.
+        # dismissed/completed are still honoured.
+        cid, course = topic_course(topic, cmap, st)
+    if not cid:
+        cid, course = consider_course(fired_cats, session, st, cmap)
     if cid:
         rec = _course_rec(st, cid)
         rec["times_suggested"] += 1
@@ -1415,6 +1462,18 @@ def cmd_courses(a):
             print(f"no course mapped to '{cat}' (or all spent/dismissed)"); return 1
         print(format_note([], format_course_note({**c, "category": cat, "id": cid})))
         print("\n(preview only — no state changed)")
+        return 0
+    elif sub == "find":
+        topics = (cmap.get("topics") or {})
+        if not arg or arg not in topic_names():
+            print("topics: " + ", ".join(topic_names())); return 0
+        print(f"training for '{arg}' (auto = Duke pays and it auto-reports):\n")
+        for cid in topics[arg]:
+            c = (cmap.get("courses") or {}).get(cid, {})
+            if not c.get("verified"):
+                continue
+            print(f"  [{c.get('credit','?'):<6}] {c.get('title')}")
+            print(f"            {c.get('url')}")
         return 0
     elif sub == "refresh":
         return courses_refresh()

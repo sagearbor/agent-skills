@@ -112,7 +112,14 @@ coach points at one specific course instead of only the micro-fix.
 | `courses share on` | opt in to sending course events to the org dir (**off** by default) |
 | `courses refresh` | re-verify every URL by real HTTP fetch |
 
-**Gates** (on top of the normal severity threshold): ≥3 hits across **distinct
+**Asking counts.** If you explicitly ask how to learn something ("how do I learn
+MCP", "teach me subagents"), the coach answers with the matching course
+*immediately* — the repetition and cooldown gates are skipped, because those
+exist to stop nagging and answering a direct question is not nagging. Dismissals
+are still honoured. Topics: `claude-code`, `agents`, `subagents`, `skills`,
+`mcp`, `api`, `prompting`. Look one up by hand with `/coach courses find mcp`.
+
+**Gates for unprompted pointers** (on top of the normal severity threshold): ≥3 hits across **distinct
 sessions**, one pointer per **7 days** globally, **2 suggestions max** per course
 ever, hard stop on dismiss/done.
 

@@ -108,5 +108,36 @@
     "coursera-claude-api"
    ]
   }
+ },
+ "topics": {
+  "_why": "Explicit 'how do I learn X' requests. Unlike habit categories these are not misses \u2014 the user ASKED, so the repetition and cooldown gates are bypassed. Ordered auto > manual > none.",
+  "claude-code": [
+   "coursera-intro-claude-code",
+   "skilljar-portal"
+  ],
+  "agents": [
+   "coursera-intro-claude-code",
+   "skilljar-portal"
+  ],
+  "subagents": [
+   "skilljar-portal",
+   "coursera-intro-claude-code"
+  ],
+  "skills": [
+   "skilljar-portal",
+   "dlai-agent-skills"
+  ],
+  "mcp": [
+   "coursera-mcp-intro",
+   "coursera-mcp-advanced",
+   "dlai-mcp"
+  ],
+  "api": [
+   "coursera-claude-api"
+  ],
+  "prompting": [
+   "skilljar-portal",
+   "coursera-claude-api"
+  ]
  }
 }

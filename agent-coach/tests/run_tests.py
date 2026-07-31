@@ -320,6 +320,29 @@ def run_suite():
         ac.http_ok = _real_http
         ac.COURSE_MAP = real_map
 
+        # ---------------- learning-intent -> course pointer ----------------
+        check("learning_topics_exist", "mcp" in ac.topic_names()
+              and "agents" in ac.topic_names(), f"got {ac.topic_names()}")
+        check("learning_parses_topic",
+              ac.parse_learning_topic("[]\nLEARNING: mcp") == "mcp")
+        check("learning_none_is_none",
+              ac.parse_learning_topic("[]\nLEARNING: none") is None)
+        check("learning_rejects_unknown_topic",
+              ac.parse_learning_topic("[]\nLEARNING: quantumbasketweaving") is None)
+        st_l = ac.default_course_state()
+        cid_l, crs_l = ac.topic_course("mcp", ac.load_course_map(), st_l)
+        check("learning_topic_prefers_coursera",
+              cid_l == "coursera-mcp-intro"
+              and crs_l["credit"] == "auto", f"got {cid_l}")
+        # an explicit ask bypasses min_hits/cooldown, but NOT a dismissal
+        st_l["last_pointer"] = datetime.date.today().isoformat()  # cooldown active
+        cid_c, _ = ac.topic_course("mcp", ac.load_course_map(), st_l)
+        check("learning_bypasses_cooldown", cid_c == "coursera-mcp-intro")
+        ac._course_rec(st_l, "coursera-mcp-intro")["dismissed"] = True
+        cid_d, _ = ac.topic_course("mcp", ac.load_course_map(), st_l)
+        check("learning_honours_dismissal", cid_d == "coursera-mcp-advanced",
+              f"got {cid_d}")
+
         # ---------------- A/B variant B extraction ----------------
         abj = Path(td) / "ab.jsonl"
         abj.write_text("\n".join(json.dumps(x) for x in [
