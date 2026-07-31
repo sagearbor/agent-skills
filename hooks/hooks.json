@@ -10,6 +10,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/agent-coach/agent_coach.py hook",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

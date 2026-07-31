@@ -12,20 +12,31 @@ thresholds that start low (heavy coaching for a beginner) and **auto-raise as
 each habit improves**, so it fades where you've learned and persists where you
 haven't.
 
-## Enable (one time)
-```
-python3 <this-skill-dir>/agent_coach.py install
-# restart Claude Code
-python3 <this-skill-dir>/agent_coach.py doctor    # confirm it's actually wired
-```
-Uninstall: `agent_coach.py uninstall`.
+## Enable — nothing to install
+The plugin ships the Stop hook itself (`hooks/hooks.json`, resolved via
+`${CLAUDE_PLUGIN_ROOT}`), so installing the plugin IS the wiring. No setup
+command, and nothing to redo when a new version ships.
 
-`install` writes a **version-independent launcher** to `~/.agent-coach/coach_hook.py`
-and points `settings.json` at *that*, never at a versioned plugin path. Plugin
-installs live under `.../research-skills/<version>/agent-coach/`, so baking that
-path into `settings.json` would silently kill the hook for every user at the next
-release — no error, coaching just stops. `doctor` detects that state (including
-legacy installs that still carry a versioned path) and tells you the fix.
+It is **off until you opt in**, because scoring costs money per turn and this
+skill rides in a multi-skill bundle — somebody installing it for `md-convert`
+must not silently start paying for coaching. On your first turn after install
+you get one notice, then silence:
+
+```
+ ● agent-coach is installed but OFF
+   Cost: roughly a tenth of a cent per scored turn (one small Haiku call).
+   Turn it on:        agent_coach.py on
+   Never ask again:   agent_coach.py off
+```
+
+Until you run `on`, the hook does one file read and exits — no model call, no
+cost. `off` records the decline and never asks again.
+
+**Direct-clone users** (no marketplace) still need `agent_coach.py install`,
+which writes a **version-independent launcher** to `~/.agent-coach/coach_hook.py`
+and points `settings.json` at that — never at a versioned plugin path, which
+would silently die at the next release. `doctor` accepts either route and tells
+you which one is active.
 
 ## Tune it (natural language works — the model runs these for you)
 | Command | Effect |

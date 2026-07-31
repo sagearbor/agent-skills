@@ -130,6 +130,13 @@ def default_config():
             "score_frequency": 1,       # 1 = every turn; N = every Nth
             "ramp_after": 3, "ramp_to": 5, "frequency_ramped": False,
             "turn": 0,
+            # The plugin ships the Stop hook (hooks/hooks.json), so wiring needs
+            # no setup command. But scoring COSTS MONEY per turn, and this skill
+            # rides in a 9-skill bundle — someone installing it for md-convert
+            # must not silently start paying for coaching. The hook is therefore
+            # inert until the user opts in, and says so exactly once.
+            "activated": False,
+            "first_run_notice": False,
             "precision": "date",        # "full" adds wall-clock time LOCALLY only
             "ask_after": ASK_AFTER_DEFAULT,
             "last_event_epoch": None,   # for gap_s (burst analysis)
@@ -153,6 +160,8 @@ def load_config():
     cfg.setdefault("precision", "date")
     cfg.setdefault("ask_after", ASK_AFTER_DEFAULT)
     cfg.setdefault("last_event_epoch", None)
+    cfg.setdefault("activated", False)
+    cfg.setdefault("first_run_notice", False)
     return cfg
 
 
@@ -630,6 +639,17 @@ def log_event(ev, course_event=None, share_courses=False):
             pass
 
 
+FIRST_RUN_NOTICE = "\n".join([
+    BANNER,
+    " ● agent-coach is installed but OFF",
+    "   It can score each finished turn and coach you on how you're driving",
+    "   the agent — model choice, plan-first, verifying, avoiding thrash.",
+    "   Cost: roughly a tenth of a cent per scored turn (one small Haiku call).",
+    "",
+    "   Turn it on:        agent_coach.py on",
+    "   Never ask again:   agent_coach.py off",
+    BANNER_END])
+
 PENDING = lambda: COACH_DIR / "pending_note.txt"  # noqa: E731
 
 
@@ -653,6 +673,15 @@ def run_hook(stdin_data):
                 out = {"systemMessage": note}
         except OSError:
             pass
+    # Not opted in yet: never spawn a scorer (zero cost), but say so once.
+    if not cfg.get("activated", False):
+        if not cfg.get("first_run_notice", False):
+            cfg["first_run_notice"] = True
+            save_config(cfg)
+            if not out:
+                out = {"systemMessage": FIRST_RUN_NOTICE}
+        return out
+
     tp = (stdin_data or {}).get("transcript_path")
     if tp:
         env = dict(os.environ, AGENT_COACH_ACTIVE="1")
@@ -896,13 +925,32 @@ def doctor():
 
     sp = settings_path()
     raw = sp.read_text() if sp.exists() else ""
-    wired = LAUNCHER in raw or "agent_coach.py" in raw
-    add("Stop hook wired", wired,
-        str(sp) if wired else "no agent-coach entry in settings.json",
-        "agent_coach.py install")
+    # Two legitimate wiring routes: the plugin ships hooks/hooks.json (no setup
+    # needed — the normal case), or the user ran `install` for a direct clone.
+    plugin_hook = None
+    for h in sorted(Path.home().glob(
+            ".claude/plugins/cache/*/*/*/hooks/hooks.json"), reverse=True):
+        try:
+            if "agent-coach/agent_coach.py" in h.read_text():
+                plugin_hook = h
+                break
+        except OSError:
+            pass
+    manual = LAUNCHER in raw or "agent_coach.py" in raw
+    add("Stop hook wired", bool(plugin_hook or manual),
+        (f"provided by plugin: {plugin_hook}" if plugin_hook else
+         str(sp) if manual else "not wired by plugin or settings.json"),
+        "reinstall the plugin, or `agent_coach.py install` for a direct clone")
 
-    lp = launcher_path()
-    add("launcher exists", lp.exists(), str(lp), "agent_coach.py install")
+    if manual:
+        lp = launcher_path()
+        add("launcher exists", lp.exists(), str(lp), "agent_coach.py install")
+
+    cfg_d = load_config()
+    add("opted in", cfg_d.get("activated", False),
+        "ON — scoring every substantive turn" if cfg_d.get("activated")
+        else "installed but OFF (no cost, no scoring)",
+        "agent_coach.py on")
 
     # the failure this whole command exists for: a stale versioned path
     stale = bool(re.search(r"agent-coach/agent_coach\.py", raw)) and LAUNCHER not in raw
@@ -1282,9 +1330,14 @@ def main(argv=None):
             cfg["thresholds"][c] = round(max(0.0, min(1.0, cfg["thresholds"][c] + step)), 3)
         save_config(cfg); print(f"all thresholds {'raised' if step > 0 else 'lowered'} 0.1")
     elif a.cmd == "off":
-        cfg["enabled"] = False; save_config(cfg); print("agent-coach silenced (on to restore)")
+        cfg["enabled"] = False; cfg["first_run_notice"] = True
+        save_config(cfg); print("agent-coach silenced (on to restore)")
     elif a.cmd == "on":
-        cfg["enabled"] = True; save_config(cfg); print("agent-coach on")
+        cfg["enabled"] = True; cfg["activated"] = True
+        cfg["first_run_notice"] = True
+        save_config(cfg)
+        print("agent-coach ON — scoring starts next turn (~0.1 cents/turn).")
+        print("Notes appear one turn later by design. Check with: agent_coach.py doctor")
     elif a.cmd == "escalate":
         cfg["escalation_cutoff"] = max(0.0, min(1.0, a.cutoff)); save_config(cfg)
         print(f"escalation_cutoff -> {cfg['escalation_cutoff']:.2f} "
