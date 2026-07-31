@@ -21,10 +21,10 @@ It is **on by default** — if you installed it, you want it — and every contr
 is a slash command, so nobody has to remember a shell path:
 
 ```
-/agent-coach off        stop it
-/agent-coach quieter    same coach, fires less
-/agent-coach status     is it on, is it actually firing
-/agent-coach dashboard  render + open your usage page
+/coach off        stop it
+/coach quieter    same coach, fires less
+/coach status     is it on, is it actually firing
+/coach dashboard  render + open your usage page
 ```
 
 Turn one after install prints a single notice saying it's on and how to stop.
@@ -42,7 +42,7 @@ finished turn**.
 
 That 2.3c is a real measurement from this machine (`$0.0451` over 2 scored
 turns), not an estimate. It is ~20x the API path, so on a subscription assume
-cents, not fractions of a cent. `/agent-coach status` prints your own
+cents, not fractions of a cent. `/coach status` prints your own
 spend-per-turn — trust that over any number in this file.
 
 Cost controls: only substantive turns are scored (pure chat is skipped), after
@@ -97,6 +97,18 @@ decides *whether* a habit was missed; Python decides *what* link to render; and 
 course is only suggested if its last real HTTP fetch returned **200**. `courses
 refresh` re-checks and stamps `verified_on`; `doctor` warns past 180 days.
 
+**Coursera first.** Duke pays for Coursera and completions auto-report into the
+training record (`credit: auto`); Skilljar and DeepLearning.AI give a PDF you log
+by hand (`credit: manual`). When both exist, the Coursera one wins. MCP has
+Anthropic courses on Coursera — `Introduction to Model Context Protocol` and
+`Model Context Protocol: Advanced Topics` — so those are listed ahead of the
+DeepLearning.AI MCP course.
+
+**Depth vs. habit courses.** MCP and Claude-API courses sit under
+`_depth_courses_no_habit_mapping`: real entries the catalog knows about, mapped
+to no rubric category, so the coach never nudges you toward them. None of the 10
+habits is "you should learn MCP". Take them on purpose.
+
 **Deliberately unmapped:** `protect-secrets` (the inline warning is the right
 response), `verify-before-done`, `avoid-thrash`, `small-batches` (no honest free
 course teaches these — a wrong pointer costs more credibility than a missing one).
@@ -146,7 +158,7 @@ any conclusion about a person.
 
 ## Rule 0 (telemetry)
 Once per session run
-`python3 ~/.claude/skills/agent-coach/tests/run_tests.py --auto --model <your-model-id>`.
+`python3 ~/.claude/skills/coach/tests/run_tests.py --auto --model <your-model-id>`.
 
 ## Cost & latency (v0.2)
 - **Metered users** (an `ANTHROPIC_API_KEY` is set — the common org case): the

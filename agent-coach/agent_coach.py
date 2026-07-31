@@ -134,7 +134,7 @@ def default_config():
             # the plugin IS the install — no setup command. Default ON: if you
             # installed it you want it, and "type this shell command to start"
             # is friction nobody remembers. Every coaching note carries a
-            # one-line `/agent-coach off` footer, and turn one says so plainly.
+            # one-line `/coach off` footer, and turn one says so plainly.
             "activated": True,
             "first_run_notice": False,
             "precision": "date",        # "full" adds wall-clock time LOCALLY only
@@ -662,11 +662,11 @@ FIRST_RUN_NOTICE = "\n".join([
     "   avoiding thrash — and shows a short note when something's worth fixing.",
     "   That's an ADDITIONAL model call per turn, not just extra context.",
     "",
-    "   Stop it:      /agent-coach off",
-    "   Less often:   /agent-coach quieter",
+    "   Stop it:      /coach off",
+    "   Less often:   /coach quieter",
     BANNER_END])
 
-OFF_FOOTER = "   ─ /agent-coach off to stop · /agent-coach quieter to soften"
+OFF_FOOTER = "   ─ /coach off to stop · /coach quieter to soften"
 
 PENDING = lambda: COACH_DIR / "pending_note.txt"  # noqa: E731
 
@@ -855,7 +855,7 @@ LAUNCHER_SRC = '''#!/usr/bin/env python3
 """agent-coach hook launcher — version-independent.
 
 settings.json points here, NOT at a versioned plugin path. Plugin installs live
-under .../research-skills/<version>/agent-coach/, so baking that path into
+under .../research-skills/<version>/coach/, so baking that path into
 settings.json means the hook silently dies at the next version bump. This stub
 never moves; it finds whichever copy of the skill currently exists.
 """
@@ -864,10 +864,10 @@ from pathlib import Path
 
 CANDIDATES = []
 CANDIDATES += sorted(glob.glob(str(Path.home() /
-    ".claude/plugins/cache/*/*/*/agent-coach/agent_coach.py")), reverse=True)
-CANDIDATES += [str(Path.home() / ".claude/skills/agent-coach/agent_coach.py")]
+    ".claude/plugins/cache/*/*/*/coach/agent_coach.py")), reverse=True)
+CANDIDATES += [str(Path.home() / ".claude/skills/coach/agent_coach.py")]
 CANDIDATES += sorted(glob.glob(str(Path.home() /
-    ".claude/plugins/marketplaces/*/agent-coach/agent_coach.py")))
+    ".claude/plugins/marketplaces/*/coach/agent_coach.py")))
 
 for c in CANDIDATES:
     if os.path.exists(c):
@@ -1046,10 +1046,17 @@ def rules_revert(stamp):
 
 
 # ---------------------------------------------------------- catalog refresh
-def http_ok(url, timeout=12):
-    """(status, title) — a course only enters the catalog if this returns 200.
-    No model is ever asked to produce a link, so a hallucinated URL cannot
-    reach staff."""
+def http_ok(url, timeout=15):
+    """(status, title, checked) — a course is only ever suggested if a real
+    fetch returned 200, so no invented link can reach staff.
+
+    `checked` distinguishes "the server answered" from "we could not reach it".
+    That distinction is load-bearing: on a corporate network doing TLS
+    inspection, urllib raises CERTIFICATE_VERIFY_FAILED for every URL, and
+    treating that as "not verified" would silently empty the whole catalog.
+    curl uses the system keychain, so it is the fallback that works behind
+    Duke's VPN when urllib cannot.
+    """
     import urllib.request
     import urllib.error
     req = urllib.request.Request(url, headers={"User-Agent": "agent-coach/1.1"})
@@ -1057,12 +1064,22 @@ def http_ok(url, timeout=12):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             body = r.read(200_000).decode("utf-8", "replace")
             m = re.search(r"<title[^>]*>(.*?)</title>", body, re.S | re.I)
-            title = " ".join(m.group(1).split())[:120] if m else ""
-            return r.status, title
+            return r.status, (" ".join(m.group(1).split())[:120] if m else ""), True
     except urllib.error.HTTPError as e:
-        return e.code, ""
-    except Exception as e:
-        return 0, type(e).__name__
+        return e.code, "", True          # server answered — a real 404 counts
+    except Exception:
+        pass                             # transport failed — try curl
+    try:
+        p = subprocess.run(
+            ["curl", "-sS", "-L", "-o", "/dev/null", "-w", "%{http_code}",
+             "--max-time", str(timeout), url],
+            capture_output=True, text=True, timeout=timeout + 5)
+        code = int((p.stdout or "0").strip() or 0)
+        if code:
+            return code, "", True
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return 0, "", False                  # genuinely could not check
 
 
 def courses_refresh():
@@ -1070,23 +1087,40 @@ def courses_refresh():
     courses = cmap.get("courses") or {}
     if not courses:
         print("course_map.json has no courses"); return 1
-    print(f"verifying {len(courses)} course URLs (200 = keep, anything else = flagged)\n")
-    ok = 0
+    print(f"verifying {len(courses)} course URLs "
+          f"(200 = keep · other = flagged · unreachable = prior status kept)\n")
+    ok = unreachable = 0
     for cid, c in sorted(courses.items()):
-        st, title = http_ok(c["url"])
+        st, title, checked = http_ok(c["url"])
+        if not checked:
+            # Could not reach it. Do NOT downgrade a previously good entry —
+            # a flaky network must never silently empty the catalog.
+            unreachable += 1
+            c["last_check_error"] = "unreachable"
+            print(f"  [ - ] {cid:34s} unreachable — keeping "
+                  f"verified={c.get('verified', False)}")
+            continue
+        c.pop("last_check_error", None)
         c["last_status"] = st
         c["verified"] = (st == 200)
         if title and st == 200:
             c["fetched_title"] = title
         ok += st == 200
-        print(f"  [{st or 'ERR':>3}] {cid:34s} {c['url']}")
+        print(f"  [{st:>3}] {cid:34s} {c['url']}")
         if title and st == 200:
             print(f"        title: {title}")
-    cmap["verified_on"] = datetime.date.today().isoformat()
     cmap["courses"] = courses
+    if unreachable < len(courses):
+        cmap["verified_on"] = datetime.date.today().isoformat()
     _write_json(COURSE_MAP, cmap)
-    print(f"\n{ok}/{len(courses)} verified 200 · verified_on={cmap['verified_on']}")
-    print("Entries not returning 200 stay in the file but are never suggested.")
+    live = sum(1 for c in courses.values() if c.get("verified"))
+    print(f"\n{ok}/{len(courses) - unreachable} checked returned 200 · "
+          f"{unreachable} unreachable · {live} suggestable · "
+          f"verified_on={cmap.get('verified_on')}")
+    if unreachable:
+        print("Unreachable entries kept their previous status. On Duke VPN, TLS "
+              "inspection can break python's cert check — curl fallback is tried "
+              "automatically.")
     return 0
 
 
@@ -1359,13 +1393,13 @@ def main(argv=None):
         save_config(cfg); print(f"all thresholds {'raised' if step > 0 else 'lowered'} 0.1")
     elif a.cmd == "off":
         cfg["enabled"] = False; cfg["first_run_notice"] = True
-        save_config(cfg); print("agent-coach silenced — /agent-coach on to restore")
+        save_config(cfg); print("agent-coach silenced — /coach on to restore")
     elif a.cmd == "on":
         cfg["enabled"] = True; cfg["activated"] = True
         cfg["first_run_notice"] = True
         save_config(cfg)
         print("agent-coach ON — scoring starts next turn (~0.1 cents/turn).")
-        print("Notes appear one turn later by design. Check with: /agent-coach status")
+        print("Notes appear one turn later by design. Check with: /coach status")
     elif a.cmd == "escalate":
         cfg["escalation_cutoff"] = max(0.0, min(1.0, a.cutoff)); save_config(cfg)
         print(f"escalation_cutoff -> {cfg['escalation_cutoff']:.2f} "

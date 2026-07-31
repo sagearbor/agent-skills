@@ -5,7 +5,7 @@ allowed-tools: ["Bash", "Read"]
 
 # agent-coach control
 
-The user typed `/agent-coach $ARGUMENTS`. Run the matching command and report
+The user typed `/coach $ARGUMENTS`. Run the matching command and report
 the output plainly. Do NOT lecture them about coaching — just do it.
 
 Resolve the script path once (works for both the marketplace install and a

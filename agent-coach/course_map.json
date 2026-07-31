@@ -1,6 +1,6 @@
 {
  "_comment": "HUMAN-EDITED. This file is NEVER sent to the scoring model \u2014 the model decides WHETHER a habit was missed, agent_coach.py decides WHAT link to render. Run `agent_coach.py courses refresh` to re-verify: a course is only ever suggested if its last fetch returned HTTP 200.",
- "verified_on": "2026-07-30",
+ "verified_on": "2026-07-31",
  "sources": {
   "coursera_partner": "https://www.coursera.org/partners/anthropic",
   "skilljar": "https://anthropic.skilljar.com/"
@@ -51,6 +51,22 @@
    "verified": true,
    "last_status": 200,
    "fetched_title": "MCP: Build Rich-Context AI Apps with Anthropic - DeepLearning.AI"
+  },
+  "coursera-mcp-intro": {
+   "title": "Introduction to Model Context Protocol",
+   "provider": "Coursera",
+   "url": "https://www.coursera.org/learn/introduction-to-model-context-protocol",
+   "credit": "auto",
+   "verified": true,
+   "last_status": 200
+  },
+  "coursera-mcp-advanced": {
+   "title": "Model Context Protocol: Advanced Topics",
+   "provider": "Coursera",
+   "url": "https://www.coursera.org/learn/model-context-protocol-advanced-topics",
+   "credit": "auto",
+   "verified": true,
+   "last_status": 200
   }
  },
  "categories": {
@@ -78,6 +94,17 @@
    "verify-before-done": "Nearest honest fit is AI evals training; the strong one is paid (Maven). A wrong pointer costs more credibility than a missing one.",
    "avoid-thrash": "No honest Anthropic/Coursera course teaches this specifically.",
    "small-batches": "No honest Anthropic/Coursera course teaches this specifically."
+  },
+  "_depth_courses_no_habit_mapping": {
+   "_why": "Depth courses, not habit fixes. No rubric category means the coach never nudges you toward them \u2014 take them on purpose. Listed here so `courses` can find them.",
+   "mcp": [
+    "coursera-mcp-intro",
+    "coursera-mcp-advanced",
+    "dlai-mcp"
+   ],
+   "api": [
+    "coursera-claude-api"
+   ]
   }
  }
 }

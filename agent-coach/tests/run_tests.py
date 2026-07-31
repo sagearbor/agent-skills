@@ -290,6 +290,36 @@ def run_suite():
         check("repo_root_name_falls_back_outside_git",
               ac.repo_root_name(str(Path(td))) == Path(td).name)
 
+        # An unreachable network must NEVER downgrade a verified course.
+        # Real incident: TLS inspection on VPN made urllib fail for every URL,
+        # and the refresh marked all 7 courses unverified -> catalog emptied.
+        import shutil as _sh
+        real_map = ac.COURSE_MAP
+        tmp_map = Path(td) / "cmap.json"
+        tmp_map.write_text(json.dumps({
+            "verified_on": "2026-07-30",
+            "courses": {"c1": {"title": "T", "provider": "P", "credit": "auto",
+                               "url": "https://example.invalid/x",
+                               "verified": True, "last_status": 200}},
+            "categories": {"delegate-search": ["c1"]}}))
+        ac.COURSE_MAP = tmp_map
+        _real_http = ac.http_ok
+        ac.http_ok = lambda u, timeout=15: (0, "", False)   # unreachable
+        ac.courses_refresh()
+        after = json.loads(tmp_map.read_text())["courses"]["c1"]
+        check("unreachable_keeps_verified", after["verified"] is True,
+              f"verified was downgraded to {after['verified']}")
+        check("unreachable_records_error",
+              after.get("last_check_error") == "unreachable")
+        # a real 404 SHOULD unverify
+        ac.http_ok = lambda u, timeout=15: (404, "", True)
+        ac.courses_refresh()
+        after = json.loads(tmp_map.read_text())["courses"]["c1"]
+        check("real_404_unverifies", after["verified"] is False
+              and after["last_status"] == 404, f"got {after}")
+        ac.http_ok = _real_http
+        ac.COURSE_MAP = real_map
+
         # catalog staleness surfaces in `courses status`
         check("catalog_staleness_helper",
               ac._days_since("2000-01-01") > ac.CATALOG_STALE_DAYS
