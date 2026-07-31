@@ -540,9 +540,12 @@ def consider_course(fired_cats, session, st, cmap):
 
 
 def format_course_note(course):
-    credit = ("counts automatically toward your Duke training record"
-              if course.get("credit") == "auto"
-              else "certificate is manual — log it yourself")
+    credit = {"auto": "free via Duke's Coursera — completion auto-reports to "
+                      "your training record",
+              "manual": "free, but the certificate is manual — log it yourself",
+              "none": "free to take, but the certificate is paywalled — it "
+                      "cannot count toward your training record"}.get(
+        course.get("credit"), "credit status unknown")
     return "\n".join([
         f" ● {course['category']} — worth some training time",
         f"   You've hit this in {COURSE_MIN_HITS}+ separate sessions.",

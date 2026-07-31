@@ -5,7 +5,7 @@
   "coursera_partner": "https://www.coursera.org/partners/anthropic",
   "skilljar": "https://anthropic.skilljar.com/"
  },
- "credit_policy": "Coursera completions auto-report into Duke's training record ('auto'). Skilljar and DeepLearning.AI give a PDF certificate that must be logged by hand ('manual'). Prefer auto where both exist.",
+ "credit_policy": "auto = Coursera, Duke pays and completion auto-reports. manual = free certificate you log by hand. none = free content but the certificate is paywalled, so it cannot count toward a training record. Order every category auto > manual > none. Maven evals training is deliberately absent: it is paid and we do not point staff at paid courses.",
  "courses": {
   "coursera-intro-claude-code": {
    "title": "Vibe Coding with Claude Code (was: Introduction to Claude Code)",
@@ -38,19 +38,21 @@
    "title": "Agent Skills with Anthropic",
    "provider": "DeepLearning.AI",
    "url": "https://www.deeplearning.ai/courses/agent-skills-with-anthropic",
-   "credit": "manual",
+   "credit": "none",
    "verified": true,
    "last_status": 200,
-   "fetched_title": "Agent Skills with Anthropic - DeepLearning.AI"
+   "fetched_title": "Agent Skills with Anthropic - DeepLearning.AI",
+   "credit_note": "free to take; certificate requires paid DeepLearning.AI Pro, so nothing auto- or hand-logs to Duke"
   },
   "dlai-mcp": {
    "title": "MCP: Build Rich-Context AI Apps with Anthropic",
    "provider": "DeepLearning.AI",
    "url": "https://www.deeplearning.ai/courses/mcp-build-rich-context-ai-apps-with-anthropic",
-   "credit": "manual",
+   "credit": "none",
    "verified": true,
    "last_status": 200,
-   "fetched_title": "MCP: Build Rich-Context AI Apps with Anthropic - DeepLearning.AI"
+   "fetched_title": "MCP: Build Rich-Context AI Apps with Anthropic - DeepLearning.AI",
+   "credit_note": "free to take; certificate requires paid DeepLearning.AI Pro, so nothing auto- or hand-logs to Duke"
   },
   "coursera-mcp-intro": {
    "title": "Introduction to Model Context Protocol",
@@ -80,8 +82,8 @@
    "coursera-intro-claude-code"
   ],
   "use-skills": [
-   "dlai-agent-skills",
-   "skilljar-portal"
+   "skilljar-portal",
+   "dlai-agent-skills"
   ],
   "delegate-search": [
    "skilljar-portal"
