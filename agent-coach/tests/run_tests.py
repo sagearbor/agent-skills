@@ -278,6 +278,18 @@ def run_suite():
                 ru = ac.consider_course({cat}, s, st, cmap)
             check(f"course_unmapped_{cat}", ru[0] is None, f"{cat} -> {ru}")
 
+        # project label must come from the REPO ROOT, not the subdir you are in
+        # (real bug: sitting in <repo>/tmp/wrapups logged project="wrapups")
+        import subprocess as _sp
+        repo = Path(td) / "myrepo"
+        (repo / "tmp" / "deep").mkdir(parents=True)
+        _sp.run(["git", "init", "-q", str(repo)], capture_output=True)
+        check("project_label_is_repo_not_subdir",
+              ac.repo_root_name(str(repo / "tmp" / "deep")) == "myrepo",
+              f'got {ac.repo_root_name(str(repo / "tmp" / "deep"))}')
+        check("repo_root_name_falls_back_outside_git",
+              ac.repo_root_name(str(Path(td))) == Path(td).name)
+
         # catalog staleness surfaces in `courses status`
         check("catalog_staleness_helper",
               ac._days_since("2000-01-01") > ac.CATALOG_STALE_DAYS

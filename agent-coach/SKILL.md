@@ -33,12 +33,21 @@ off, the hook does one file read and exits — no model call, no cost.
 
 **What it costs, honestly.** Unlike a normal skill, which only adds text to
 calls you were already making, agent-coach fires **one additional model call per
-finished turn**. With an `ANTHROPIC_API_KEY` set that's a direct Haiku call —
-roughly 700 input tokens, ~100 out, a fraction of a cent. Without a key it
-shells out to `claude -p`, which spends **subscription allowance** rather than
-dollars, and costs more per turn because Claude Code re-sends its own system
-prompt. Only substantive turns are scored, and after turn 3 it drops to every
-5th turn automatically.
+finished turn**.
+
+| Path | When | Measured |
+|---|---|---|
+| Direct Haiku API | `ANTHROPIC_API_KEY` is set | ~700 in / ~100 out tokens — a fraction of a cent |
+| `claude -p` | no key (Claude subscription) | **~2.3 cents/turn** of allowance — Claude Code re-sends its own system prompt each call |
+
+That 2.3c is a real measurement from this machine (`$0.0451` over 2 scored
+turns), not an estimate. It is ~20x the API path, so on a subscription assume
+cents, not fractions of a cent. `/agent-coach status` prints your own
+spend-per-turn — trust that over any number in this file.
+
+Cost controls: only substantive turns are scored (pure chat is skipped), after
+turn 3 it drops to every 5th turn automatically, `quieter` raises all
+thresholds, and `budget <daily-$>` hard-stops for the day.
 
 **Direct-clone users** (no marketplace) still run `agent_coach.py install`, which
 writes a version-independent launcher to `~/.agent-coach/coach_hook.py` rather

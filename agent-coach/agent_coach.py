@@ -183,6 +183,19 @@ def _write_json(path, obj):
 
 
 # -------------------------------------------------------------- project tags
+def repo_root_name(cwd):
+    """Basename of the REPO, not of whatever subdirectory you happen to be in.
+    Sitting in <repo>/tmp/wrapups must still log the project as the repo."""
+    try:
+        p = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=5)
+        if p.returncode == 0 and p.stdout.strip():
+            return Path(p.stdout.strip()).name
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return Path(cwd).name
+
+
 def repo_key(cwd):
     """Stable identity for a working directory. The git remote URL is identical
     on every clone on every machine, so one person registering a repo registers
@@ -210,7 +223,7 @@ def project_info(cwd):
     key = repo_key(cwd)
     rec = projs.get(key) or {}
     return {"key": key,
-            "project": rec.get("project") or Path(cwd).name,
+            "project": rec.get("project") or repo_root_name(cwd),
             "d1": rec.get("d1"),
             "tier": rec.get("tier", "unset"),
             "asked": bool(rec.get("asked"))}
@@ -219,8 +232,8 @@ def project_info(cwd):
 def set_project(cwd, value):
     projs = load_projects()
     key = repo_key(cwd)
-    rec = projs.get(key) or {"project": Path(cwd).name}
-    rec["project"] = rec.get("project") or Path(cwd).name
+    rec = projs.get(key) or {"project": repo_root_name(cwd)}
+    rec["project"] = rec.get("project") or repo_root_name(cwd)
     if value == "poc":
         rec.update({"d1": None, "tier": "poc", "asked": True})
     elif value == "skip":
@@ -1176,6 +1189,12 @@ def cmd_status(cfg):
           f"  (>0 sends low-certainty calls to {cfg['escalation_model']})")
     print(f"precision={cfg.get('precision', 'date')} "
           f"(full = wall-clock time in the LOCAL log only, never shared)")
+    scored = cfg.get("turn", 0)
+    spent = cfg.get("spend_today", 0.0)
+    path = "direct API" if os.environ.get("ANTHROPIC_API_KEY") else "claude -p (subscription)"
+    per = f"${spent / scored:.4f}" if scored else "n/a"
+    print(f"scoring path={path}  turns={scored}  spent today=${spent:.4f}  "
+          f"avg/turn={per}")
     print(f"{'category':18s} {'threshold':>9s} {'clean-streak':>13s}")
     for c in categories():
         print(f"{c:18s} {cfg['thresholds'][c]:>9.2f} {cfg['clean_streak'][c]:>13d}")
