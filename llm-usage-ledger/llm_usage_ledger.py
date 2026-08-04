@@ -935,6 +935,8 @@ def main(argv=None):
                    choices=["project", "model", "user", "project-model"])
     p.add_argument("--windows", action="store_true")
     p.add_argument("--days", type=float)
+    p.add_argument("--open", action="store_true",
+                   help="open the generated --html dashboard in the browser")
     p.add_argument("--html", nargs="?", const="llm_usage_report.html",
                    metavar="PATH", help="write a self-contained graphical "
                    "HTML report (charts over the whole ledger dir) to PATH")
@@ -950,6 +952,20 @@ def main(argv=None):
     if a.cmd == "report":
         if a.html:
             html_report(a.html, days=a.days)
+            out = Path(a.html).expanduser().resolve()
+            print(f"file://{out}")          # clickable in most terminals
+            if a.open:
+                import subprocess as _sp
+                opener = ("open" if sys.platform == "darwin"
+                          else "xdg-open" if sys.platform.startswith("linux")
+                          else None)
+                if opener:
+                    try:
+                        _sp.run([opener, str(out)], check=False,
+                                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                        print("opened in your browser")
+                    except OSError:
+                        pass
         else:
             print_report(by=a.by, windows=a.windows, days=a.days)
         return 0
