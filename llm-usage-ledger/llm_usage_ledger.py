@@ -499,6 +499,7 @@ def _all_usage_events():
              "sub": bool(e.get("subscription")),
              "model": e.get("model", "?"), "project": e.get("project", "?"),
              "machine": e.get("machine", "?"),
+             "user": e.get("user") or "?",
              "tin": e.get("prompt_tokens") or 0,
              "tout": e.get("completion_tokens") or 0,
              "cr": e.get("cache_read_tokens") or 0,
@@ -522,7 +523,7 @@ def _agg_rows(events, series):
     agg = {}
     for e in events:
         key = (e["ts"][:blen], e["model"], e["project"], bool(e["local"]),
-               bool(e.get("sub")), e.get("machine", "?"))
+               bool(e.get("sub")), e.get("machine", "?"), e.get("user", "?"))
         r = agg.setdefault(key, {"i": 0, "o": 0, "c": 0, "s": 0.0})
         r["i"] += e["tin"]
         r["o"] += e["tout"]
@@ -534,9 +535,9 @@ def _agg_rows(events, series):
                    + e.get("cr", 0) / 1e6 * pin * 0.1
                    + e.get("w5", 0) / 1e6 * pin * 1.25
                    + e.get("w1", 0) / 1e6 * pin * 2.0)
-    rows = [{"b": b, "m": m, "p": p, "l": l, "u": u, "M": M, "i": r["i"],
-             "o": r["o"], "c": r["c"], "s": round(r["s"], 4)}
-            for (b, m, p, l, u, M), r in agg.items()]
+    rows = [{"b": b, "m": m, "p": p, "l": l, "u": u, "M": M, "U": U,
+             "i": r["i"], "o": r["o"], "c": r["c"], "s": round(r["s"], 4)}
+            for (b, m, p, l, u, M, U), r in agg.items()]
     rows.sort(key=lambda r: r["b"])
     return rows, ("daily" if blen == 10 else "hourly")
 
@@ -874,8 +875,14 @@ render();
 </body></html>"""
 
 
-def html_report(path, days=None):
+def html_report(path, days=None, only_user=None):
+    """only_user: restrict to one person's rows. On a SHARED ledger dir the
+    default is you-only — a colleague opening the dashboard should see their
+    own usage, not an unrequested league table of everyone's spend. Pass
+    only_user=None explicitly (CLI: --all) for the org-wide roll-up."""
     events = _all_usage_events()
+    if only_user:
+        events = [e for e in events if (e.get("user") or "?") == only_user]
     if days:
         cutoff = (datetime.datetime.now().astimezone()
                   - datetime.timedelta(days=days)).isoformat()
@@ -935,6 +942,10 @@ def main(argv=None):
                    choices=["project", "model", "user", "project-model"])
     p.add_argument("--windows", action="store_true")
     p.add_argument("--days", type=float)
+    p.add_argument("--all", action="store_true",
+                   help="include every user (default on a SHARED ledger dir is "
+                        "your own rows only)")
+    p.add_argument("--user", help="restrict to one user (default: you)")
     p.add_argument("--open", action="store_true",
                    help="open the generated --html dashboard in the browser")
     p.add_argument("--html", nargs="?", const="llm_usage_report.html",
@@ -951,7 +962,15 @@ def main(argv=None):
 
     if a.cmd == "report":
         if a.html:
-            html_report(a.html, days=a.days)
+            # Shared dir => default to just you. Local dir is already just you,
+            # so the flag is a no-op there and nobody has to think about it.
+            shared = bool(os.environ.get("LLM_TOKEN_LEDGER_DIR"))
+            who = a.user or (None if a.all else (whoami() if shared else None))
+            html_report(a.html, days=a.days, only_user=who)
+            if who:
+                print(f"(showing {who} only — add --all for everyone)")
+            elif shared:
+                print("(showing ALL users)")
             out = Path(a.html).expanduser().resolve()
             print(f"file://{out}")          # clickable in most terminals
             if a.open:

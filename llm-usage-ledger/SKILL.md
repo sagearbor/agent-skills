@@ -35,9 +35,18 @@ local-model software. (Local-model server control lives in the separate
 | Command | Purpose |
 |---|---|
 | `report [--by project\|model\|user\|project-model] [--windows] [--days N]` | cross-repo usage rollup + burst analysis |
-| `report --html [PATH]` | self-contained interactive $-vs-tokens dashboard (works from any dir/repo) |
+| `report --html [PATH] [--open]` | self-contained interactive $-vs-tokens dashboard; prints a clickable `file://` URL, `--open` launches the browser |
+| `report --html --all` / `--user NAME` | on a SHARED ledger dir the dashboard defaults to **your own rows only**; `--all` shows everyone |
 | `prices update` / `prices list` | append dated hosted rates (LiteLLM table) for models seen in the ledger; reports join **as-of** each event's date — entries are never edited, so old reports stay reproducible |
 | `ingest claude-code` / `ingest codex` | derive subscription-plan usage (flat-fee tools) from local transcripts into the ledger — idempotent, merged by message UUID |
+
+## Shared drive: you see you, by default
+Point `LLM_TOKEN_LEDGER_DIR` at a network path and every colleague's file lands
+in one directory. But a person opening their dashboard should see **their own**
+usage — not an unrequested league table of who spent what. So when that env var
+is set, `report --html` filters to the current user automatically. `--all` opts
+into the org roll-up, `--user NAME` looks at one person. On a local dir the
+filter is a no-op, so nobody has to think about it.
 
 ## Rules
 

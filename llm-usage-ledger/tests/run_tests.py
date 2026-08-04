@@ -14,6 +14,7 @@ import json
 import os
 import statistics
 import subprocess
+import pathlib
 import sys
 import tempfile
 import time
@@ -234,6 +235,21 @@ def run_suite():
     p = subprocess.run([sys.executable,
                         str(SKILL_DIR / "llm_usage_ledger.py"),
                         "--help"], capture_output=True, timeout=20)
+    # user must survive normalization — it was silently dropped, which made
+    # any per-user filter on a SHARED ledger dir return zero rows
+    evs = ac._all_usage_events() if False else None
+    import llm_usage_ledger as _L
+    ev = {"ts": "2026-07-09T10:00:00+00:00", "model": "m", "user": "alice",
+          "project": "p", "prompt_tokens": 10, "completion_tokens": 2}
+    norm = {"ts": ev["ts"], "user": ev.get("user") or "?"}
+    check("normalizer_keeps_user_field",
+          "\"user\": e.get(\"user\")" in open(
+              str(pathlib.Path(_L.__file__))).read(),
+          "user is not carried through _all_usage_events")
+    check("agg_rows_carry_user",
+          '"U": U' in open(str(pathlib.Path(_L.__file__))).read(),
+          "chart rows do not carry a user, so per-user views are impossible")
+
     check("cli_help", p.returncode == 0)
     return r
 
