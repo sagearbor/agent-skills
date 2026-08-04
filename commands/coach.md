@@ -24,7 +24,7 @@ Then map `$ARGUMENTS` to a subcommand:
 | `on`, `start`, `enable` | `<script> on` | confirmed on; notes appear one turn later |
 | `status`, (empty) | `<script> status` then `<script> doctor` | ON/OFF, thresholds, whether it is actually firing |
 | `quieter` / `louder` | `<script> quieter` / `louder` | all thresholds nudged |
-| `dashboard` | `<script> dashboard ~/coach.html` then `open ~/coach.html` | where the file is |
+| `dashboard` | `<script> dashboard --open` (no path — writes to its own state dir) | where the file is |
 | `ab` | `<script> ab` | side-by-side A/B tally: separate-call vs same-call coaching |
 | `ab on` / `ab off` | `<script> ab on|off` | arm/disarm the comparison |
 | `courses` + anything | `<script> courses <rest>` | pass through verbatim |

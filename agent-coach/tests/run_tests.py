@@ -400,6 +400,12 @@ def run_suite():
         check("ab_injector_strips_urls", "http" not in on.stdout,
               "a URL reached the main model's context")
 
+        # dashboards must not land in $HOME or cwd
+        rp2 = ac.default_report_path()
+        check("coach_report_not_in_home", rp2.parent != Path.home(),
+              f"default dashboard path is directly in $HOME: {rp2}")
+        check("coach_report_in_state_dir", "reports" in str(rp2))
+
         # catalog staleness surfaces in `courses status`
         check("catalog_staleness_helper",
               ac._days_since("2000-01-01") > ac.CATALOG_STALE_DAYS

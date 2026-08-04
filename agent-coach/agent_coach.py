@@ -1262,7 +1262,21 @@ def read_events():
     return uniq
 
 
-def dashboard(out="agent_coach_dashboard.html"):
+def reports_dir():
+    """Generated HTML goes in the skill's own state dir — never the user's home
+    directory and never the cwd. A dashboard is a byproduct; it should not
+    litter whatever repo you happened to be standing in."""
+    d = COACH_DIR / "reports"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def default_report_path():
+    return reports_dir() / "coach.html"
+
+
+def dashboard(out=None):
+    out = str(out or default_report_path())
     from collections import Counter, defaultdict
     evs = read_events()
     turns = len(evs)
@@ -1327,6 +1341,7 @@ before drawing any conclusion about productivity.</p>
 <th>notes</th></tr>{users}</table></body></html>"""
     Path(out).write_text(html)
     print(f"wrote {out} ({turns} turns, {len(fired)} notes)")
+    print(f"file://{Path(out).resolve()}")
 
 
 # ---------------------------------------------------------------------- cli
@@ -1509,8 +1524,8 @@ def main(argv=None):
     p.add_argument("arg", nargs="?")
     sub.add_parser("rules-snapshot"); sub.add_parser("rules-list")
     p = sub.add_parser("rules-revert"); p.add_argument("stamp")
-    p = sub.add_parser("dashboard"); p.add_argument("out", nargs="?",
-                                                    default="agent_coach_dashboard.html")
+    p = sub.add_parser("dashboard"); p.add_argument("out", nargs="?", default=None)
+    p.add_argument("--open", action="store_true", help="open it in the browser")
     a = ap.parse_args(argv)
 
     if a.cmd == "hook":
@@ -1599,7 +1614,16 @@ def main(argv=None):
     elif a.cmd == "rules-revert":
         return rules_revert(a.stamp)
     elif a.cmd == "dashboard":
-        dashboard(a.out)
+        out = str(a.out or default_report_path())
+        dashboard(out)
+        if getattr(a, "open", False):
+            import subprocess as _sp
+            op = ("open" if sys.platform == "darwin"
+                  else "xdg-open" if sys.platform.startswith("linux") else None)
+            if op:
+                _sp.run([op, out], check=False,
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                print("opened in your browser")
     return 0
 
 

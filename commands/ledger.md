@@ -19,7 +19,7 @@ Map `$ARGUMENTS` to a subcommand:
 
 | Argument | Run | Then say |
 |---|---|---|
-| `dashboard`, (empty) | `<script> report --html ~/llm-spend.html --days 60 --open` | the path, and that it opened in the browser |
+| `dashboard`, (empty) | `<script> report --html --days 60 --open` | the absolute path it prints, and that it opened in the browser |
 | `dashboard <N>` | same with `--days <N>` | ditto |
 | `report` | `<script> report --days 60` | the table |
 | `by project` / `by user` / `by model` | `<script> report --days 60 --by project\|user\|model` | the table |

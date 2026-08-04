@@ -250,6 +250,25 @@ def run_suite():
           '"U": U' in open(str(pathlib.Path(_L.__file__))).read(),
           "chart rows do not carry a user, so per-user views are impossible")
 
+    # reports must never land in $HOME or the cwd — they are byproducts, and
+    # littering someone's home directory is how a tool gets uninstalled
+    rp = _L.default_report_path()
+    check("report_not_in_home", rp.parent != pathlib.Path.home(),
+          f"default report path is directly in $HOME: {rp}")
+    check("report_in_hidden_state_dir",
+          ".llm_token_ledger" in str(rp) and "reports" in str(rp),
+          f"got {rp}")
+    check("report_path_absolute", rp.is_absolute(),
+          "a relative default would litter whatever cwd you ran from")
+
+    # cross-developer identity: the join key must not be the local folder name
+    check("repo_key_is_not_folder_name",
+          _L.repo_remote_key(".") != _L.detect_project("."),
+          "repo key fell back to the folder name — two devs would not join")
+    check("project_tag_has_repo_and_d1",
+          set(("repo", "project", "d1")) <= set(_L.project_tag(".")),
+          f"got {_L.project_tag('.')}")
+
     check("cli_help", p.returncode == 0)
     return r
 

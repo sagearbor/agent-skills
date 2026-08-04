@@ -40,6 +40,30 @@ local-model software. (Local-model server control lives in the separate
 | `prices update` / `prices list` | append dated hosted rates (LiteLLM table) for models seen in the ledger; reports join **as-of** each event's date — entries are never edited, so old reports stay reproducible |
 | `ingest claude-code` / `ingest codex` | derive subscription-plan usage (flat-fee tools) from local transcripts into the ledger — idempotent, merged by message UUID |
 
+## Two developers, one repo, one number
+`detect_project()` returns the **local folder name**, so two people who clone the
+same repo into differently-named directories would log different projects and
+their spend would never add up. Every event therefore also carries:
+
+| Field | What it is |
+|---|---|
+| `project` | human label — the repo folder name (may differ per developer) |
+| `repo` | **the join key** — `git remote get-url origin`, identical on every clone on every machine |
+| `d1` | institutional project code, or absent — never invented |
+
+Group by `repo` for a number that survives people naming folders differently.
+`d1` comes from the registry agent-coach writes
+(`~/.agent-coach/projects.json`), so tagging a repo once with
+`agent_coach.py project D1-4471` labels it for BOTH ledgers. Untagged repos and
+POCs simply have no `d1` — the field is omitted rather than guessed.
+
+## Where reports are written
+Never `$HOME`, never the cwd. `report --html` with no path writes to
+`~/.llm_token_ledger/reports/llm-spend.html` and prints a clickable `file://`
+URL; `--open` launches the browser. Reports stay LOCAL even when the ledger
+itself is on a shared drive — a personal report should not auto-publish to
+colleagues. Pass an explicit path to override.
+
 ## Shared drive: you see you, by default
 Point `LLM_TOKEN_LEDGER_DIR` at a network path and every colleague's file lands
 in one directory. But a person opening their dashboard should see **their own**

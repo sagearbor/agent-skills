@@ -33,6 +33,7 @@ import getpass
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -73,8 +74,49 @@ def machine_name() -> str:
             or platform.node().split(".")[0] or "unknown")
 
 
+def repo_remote_key(cwd: str = ".") -> str:
+    """Identity that is the SAME for every developer on a repo.
+
+    detect_project() returns the local folder name, so two people who clone the
+    same repo into differently-named directories log different projects and
+    their spend never adds up. The git remote URL is identical on every clone on
+    every machine, so it is the join key. Falls back to a path for scratch dirs
+    with no remote.
+    """
+    try:
+        r = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=5)
+        url = (r.stdout or "").strip()
+        if r.returncode == 0 and url:
+            return re.sub(r"\.git$", "", url.lower())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "path:" + str(Path(cwd).resolve())
+
+
+def project_registry() -> dict:
+    """Shared with agent-coach: tag a repo once, both ledgers benefit.
+    {remote-url: {"project": ..., "d1": ..., "tier": "project"|"poc"}}"""
+    f = Path.home() / ".agent-coach" / "projects.json"
+    try:
+        return json.loads(f.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def project_tag(cwd: str = ".") -> dict:
+    """(project, d1, repo) for cwd. `d1` is the institutional code when the repo
+    has been registered; None for a POC or an untagged repo — never invented."""
+    key = repo_remote_key(cwd)
+    rec = project_registry().get(key) or {}
+    return {"repo": key,
+            "project": rec.get("project") or detect_project(cwd),
+            "d1": rec.get("d1")}
+
+
 def detect_project(cwd: str = ".") -> str:
-    """Git repo name of cwd, else the directory basename."""
+    """Git repo name of cwd, else the directory basename. NOTE: this is the
+    LOCAL folder name — use project_tag() for a cross-developer identity."""
     try:
         top = subprocess.run(
             ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
@@ -107,7 +149,12 @@ def log_usage(model: str, usage: dict, duration_s: float,
         "provider": provider,
         "machine": machine_name(),
         "user": whoami(),
-        "project": project or detect_project(),
+        # project stays the human label; repo is the cross-developer join key
+        # and d1 the institutional code when the repo has been registered.
+        # Two devs cloning into differently-named folders share `repo`, so
+        # their spend adds up even when `project` differs.
+        **({"project": project} if project else
+           {k: v for k, v in project_tag().items() if v is not None}),
         "model": model,
         "prompt_tokens": (usage or {}).get("prompt_tokens"),
         "completion_tokens": (usage or {}).get("completion_tokens"),
@@ -263,6 +310,20 @@ def print_report(by="project-model", windows=False, days=None):
 # with no hosted listing fall back to the dated reference benchmark.
 LITELLM_PRICES_URL = ("https://raw.githubusercontent.com/BerriAI/litellm/"
                       "main/model_prices_and_context_window.json")
+
+
+def reports_dir() -> Path:
+    """Where generated HTML lands. NEVER the user's home dir and never the cwd:
+    a report is a byproduct, not something to litter someone's workspace with.
+    Always LOCAL even when the ledger itself is on a shared drive — a personal
+    report must not auto-publish itself to colleagues."""
+    d = Path.home() / ".llm_token_ledger" / "reports"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def default_report_path() -> Path:
+    return reports_dir() / "llm-spend.html"
 
 
 def prices_file() -> Path:
@@ -948,7 +1009,7 @@ def main(argv=None):
     p.add_argument("--user", help="restrict to one user (default: you)")
     p.add_argument("--open", action="store_true",
                    help="open the generated --html dashboard in the browser")
-    p.add_argument("--html", nargs="?", const="llm_usage_report.html",
+    p.add_argument("--html", nargs="?", const="__DEFAULT__",
                    metavar="PATH", help="write a self-contained graphical "
                    "HTML report (charts over the whole ledger dir) to PATH")
     p = sub.add_parser("prices", help="append-only dated price series")
@@ -961,6 +1022,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "report":
+        if a.html == "__DEFAULT__":
+            a.html = str(default_report_path())
         if a.html:
             # Shared dir => default to just you. Local dir is already just you,
             # so the flag is a no-op there and nobody has to think about it.
