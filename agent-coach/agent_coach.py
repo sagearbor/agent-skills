@@ -126,7 +126,12 @@ def default_config():
             "scorer_model": SCORER_DEFAULT,
             "escalation_model": ESCALATION_DEFAULT_MODEL,
             "budget_daily_usd": None,   # None = unlimited (opt-in cap only)
-            "spend_date": "", "spend_today": 0.0,
+            # spend_today and scored_today are a matched pair: both reset on
+            # the same date rollover, so dividing one by the other is the only
+            # honest cost-per-turn. Never divide spend_today by `turn` — that
+            # is a lifetime counter incremented on skipped turns too, and the
+            # quotient understates the real cost by roughly the ramp factor.
+            "spend_date": "", "spend_today": 0.0, "scored_today": 0,
             "score_frequency": 1,       # 1 = every turn; N = every Nth
             "ramp_after": 3, "ramp_to": 5, "frequency_ramped": False,
             "turn": 0,
@@ -148,9 +153,11 @@ def default_config():
 
 def load_config():
     cfg = default_config()
+    saved = {}
     if CONFIG.exists():
         try:
-            cfg.update(json.loads(CONFIG.read_text()))
+            saved = json.loads(CONFIG.read_text())
+            cfg.update(saved)
         except (json.JSONDecodeError, OSError):
             pass
     # keep thresholds in sync with any newly-added rules
@@ -164,12 +171,21 @@ def load_config():
     cfg.setdefault("activated", True)
     cfg.setdefault("ab_mode", False)
     cfg.setdefault("first_run_notice", False)
+    # Upgrade artifact: a config written before scored_today existed carries a
+    # real spend_today with no matching count, so today's spend cannot be
+    # attributed to a number of turns. Say that plainly rather than printing a
+    # ratio built on a denominator that only started counting mid-day. Runtime
+    # only — the leading underscore keeps it out of the saved file.
+    cfg["_cost_day_partial"] = ("scored_today" not in saved
+                                and float(saved.get("spend_today") or 0) > 0)
     return cfg
 
 
 def save_config(cfg):
     COACH_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG.write_text(json.dumps(cfg, indent=1))
+    # underscore-prefixed keys are runtime-only and never persisted
+    CONFIG.write_text(json.dumps({k: v for k, v in cfg.items()
+                                  if not k.startswith("_")}, indent=1))
 
 
 def _read_json(path, fallback):
@@ -434,19 +450,35 @@ SYS = ("You are a terse pair-programming coach. Output ONLY a JSON array as "
        "instructed — no prose.")
 HAIKU_API_MODEL = "claude-haiku-4-5"
 HAIKU_IN_PER_M, HAIKU_OUT_PER_M = 1.0, 5.0  # $/M (Haiku 4.5), for budget math
+ANTHROPIC_BASE_URL_DEFAULT = "https://api.anthropic.com"
 
 
-def anthropic_score(api_model, prompt, key, timeout=30):
-    """Direct minimal Anthropic API call — ~$0.001, ~1s. Used when the user
-    is metered (ANTHROPIC_API_KEY present). Returns (text, usage) or (None,None).
+def anthropic_base_url():
+    """Where the direct-API scorer posts. Defaults to Anthropic's own API;
+    override with ANTHROPIC_BASE_URL when the org routes inference elsewhere —
+    a gateway such as Azure API Management, or a non-Anthropic-hosted
+    deployment. Trailing slashes are tolerated so both forms work."""
+    return (os.environ.get("ANTHROPIC_BASE_URL")
+            or ANTHROPIC_BASE_URL_DEFAULT).rstrip("/")
+
+
+def anthropic_score(api_model, prompt, key, timeout=30, token=None):
+    """Direct minimal API call — ~$0.001, ~1s. Used when the user is metered,
+    by either of two credentials: ANTHROPIC_API_KEY (sent as x-api-key) or
+    ANTHROPIC_AUTH_TOKEN (sent as a bearer token, for orgs that authenticate
+    rather than issue long-lived keys). Returns (text, usage) or (None, None).
     stdlib only; no SDK dependency."""
     import urllib.request
     body = json.dumps({"model": api_model, "max_tokens": 400, "system": SYS,
                        "messages": [{"role": "user", "content": prompt}]}).encode()
+    headers = {"anthropic-version": "2023-06-01",
+               "content-type": "application/json"}
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    else:
+        headers["x-api-key"] = key
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages", data=body,
-        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                 "content-type": "application/json"})
+        f"{anthropic_base_url()}/v1/messages", data=body, headers=headers)
     try:
         obj = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
         text = "".join(b.get("text", "") for b in obj.get("content", [])
@@ -474,12 +506,21 @@ def claude_p_score(model, prompt, timeout=60):
         return None, None
 
 
+def metered_credential():
+    """(key, token) for the direct-API path, either of which may be None.
+    A bearer token wins if both are set — an org that mints tokens has
+    deliberately moved off static keys."""
+    return (os.environ.get("ANTHROPIC_API_KEY"),
+            os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+
+
 def call_model(model, prompt, timeout=60, api_model=None):
-    """Prefer the cheap direct API when a key is available (metered users:
-    ~$0.001), else `claude -p` (subscription users: key-free)."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        text, usage = anthropic_score(api_model or HAIKU_API_MODEL, prompt, key)
+    """Prefer the cheap direct API when a credential is available (metered
+    users: ~$0.001), else `claude -p` (subscription users: key-free)."""
+    key, token = metered_credential()
+    if key or token:
+        text, usage = anthropic_score(api_model or HAIKU_API_MODEL, prompt,
+                                      key, token=token)
         if text is not None:
             return text, {**usage, "_path": "api"}
     text, usage = claude_p_score(model, prompt, timeout)
@@ -829,6 +870,7 @@ def do_score(transcript_path, cwd, session=None):
     today = datetime.date.today().isoformat()
     if cfg.get("spend_date") != today:
         cfg["spend_date"], cfg["spend_today"] = today, 0.0
+        cfg["scored_today"] = 0   # reset with spend, so the ratio stays honest
     cap = cfg.get("budget_daily_usd")
     if cap is not None and cfg["spend_today"] >= cap:
         save_config(cfg)
@@ -837,6 +879,7 @@ def do_score(transcript_path, cwd, session=None):
     user_text, summary, _meta = turn
     text, usage = call_model(cfg["scorer_model"], build_prompt(user_text, summary))
     cfg["spend_today"] = round(cfg.get("spend_today", 0.0) + usage_cost_usd(usage), 5)
+    cfg["scored_today"] = cfg.get("scored_today", 0) + 1
     scores = parse_scores(text)
 
     fired = []
@@ -1351,12 +1394,29 @@ def cmd_status(cfg):
           f"  (>0 sends low-certainty calls to {cfg['escalation_model']})")
     print(f"precision={cfg.get('precision', 'date')} "
           f"(full = wall-clock time in the LOCAL log only, never shared)")
-    scored = cfg.get("turn", 0)
+    lifetime = cfg.get("turn", 0)
+    scored = cfg.get("scored_today", 0)
     spent = cfg.get("spend_today", 0.0)
-    path = "direct API" if os.environ.get("ANTHROPIC_API_KEY") else "claude -p (subscription)"
-    per = f"${spent / scored:.4f}" if scored else "n/a"
-    print(f"scoring path={path}  turns={scored}  spent today=${spent:.4f}  "
-          f"avg/turn={per}")
+    key, token = metered_credential()
+    path = ("direct API" if (key or token) else "claude -p (subscription)")
+    if key or token:
+        path += f" [{anthropic_base_url()}]"
+    # spend_today / scored_today — both reset on the same date rollover. The
+    # denominator counts turns actually SCORED today, not lifetime turns, so
+    # the ramp's skipped turns cannot deflate it.
+    if cfg.get("_cost_day_partial"):
+        per = "n/a (counter added today — accurate from tomorrow)"
+    elif scored:
+        per = f"${spent / scored:.4f}"
+    else:
+        per = "n/a (nothing scored today)"
+    freq = cfg.get("score_frequency", 1)
+    print(f"scoring path={path}  lifetime turns={lifetime}")
+    print(f"scored today={scored}  spent today=${spent:.4f}  "
+          f"cost per SCORED turn={per}")
+    if scored and freq > 1 and not cfg.get("_cost_day_partial"):
+        print(f"  → at 1-in-{freq} scoring that is ~${spent / scored / freq:.4f} "
+              f"per turn of actual use")
     print(f"{'category':18s} {'threshold':>9s} {'clean-streak':>13s}")
     for c in categories():
         print(f"{c:18s} {cfg['thresholds'][c]:>9.2f} {cfg['clean_streak'][c]:>13d}")

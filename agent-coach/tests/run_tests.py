@@ -59,6 +59,53 @@ def run_suite():
         ac.save_config(cfg)
         check("config_roundtrip", ac.load_config()["thresholds"] == cfg["thresholds"])
 
+        # cost math: spend_today must be divided by turns SCORED today, never
+        # by the lifetime `turn` counter (which counts ramp-skipped turns and
+        # so deflates the quotient by roughly the ramp factor).
+        check("scored_today_defaulted", cfg.get("scored_today") == 0,
+              f"got {cfg.get('scored_today')!r}")
+        cfg["turn"], cfg["scored_today"], cfg["spend_today"] = 100, 4, 0.0920
+        honest = cfg["spend_today"] / cfg["scored_today"]
+        naive = cfg["spend_today"] / cfg["turn"]
+        check("cost_per_scored_turn", abs(honest - 0.023) < 1e-9,
+              f"got {honest}")
+        check("cost_naive_denominator_rejected", naive < honest / 20,
+              f"naive={naive} honest={honest} — the bug must stay reproducible "
+              "as a contrast case")
+
+        # upgrade artifact: pre-scored_today config with same-day spend must be
+        # flagged unattributable, and the runtime flag must never be persisted
+        ac.CONFIG.write_text(json.dumps(
+            {"spend_date": "2026-08-07", "spend_today": 0.096, "turn": 61}))
+        legacy = ac.load_config()
+        check("legacy_cost_day_flagged", legacy["_cost_day_partial"] is True)
+        ac.save_config(legacy)
+        check("runtime_keys_not_persisted",
+              "_cost_day_partial" not in json.loads(ac.CONFIG.read_text()))
+        check("legacy_flag_clears_after_save",
+              ac.load_config()["_cost_day_partial"] is False)
+        ac.CONFIG.unlink()
+
+        # base URL is configurable for orgs that route inference elsewhere
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
+        check("base_url_default",
+              ac.anthropic_base_url() == "https://api.anthropic.com",
+              f"got {ac.anthropic_base_url()}")
+        os.environ["ANTHROPIC_BASE_URL"] = "https://gw.example.org/anthropic/"
+        check("base_url_override_strips_slash",
+              ac.anthropic_base_url() == "https://gw.example.org/anthropic",
+              f"got {ac.anthropic_base_url()}")
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
+
+        # keyless auth: a bearer token alone must select the metered path
+        for v in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            os.environ.pop(v, None)
+        check("credential_none", ac.metered_credential() == (None, None))
+        os.environ["ANTHROPIC_AUTH_TOKEN"] = "tok-abc"
+        k, t = ac.metered_credential()
+        check("credential_token_only", k is None and t == "tok-abc", f"got {(k, t)}")
+        os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+
         # score parsing from a fixture claude -p 'result' text
         scores = ac.parse_scores(
             'here you go: [{"category":"model-selection","severity":0.8,'
