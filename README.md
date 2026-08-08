@@ -40,14 +40,14 @@ enforced by CI, not by anyone watching a changelog:
 
 | skill | version | tests | last change | description |
 |---|---|---|---|---|
-| **agent-coach** | 1.1.0 | 63 | 2026-08-04 | Pair-programming coach for people learning an AI coding agent (Claude Code, Codex, Cursor) |
-| **codex-security-scan** | 0.1.0 | 38 | 2026-08-04 | Run a real security scan on one repo or many, using OpenAI's open-source Codex Security methodology (threat mo |
-| **llm-usage-ledger** | 1.0.0 | 27 | 2026-08-04 | Track EVERY LLM usage stream — cloud API calls, Claude Code/Codex subscription transcripts (ingest), and local |
-| **lmstudio-panel** | 0.9.0 | 19 | 2026-08-04 | Control a local LM Studio server — serve, list/load/unload models, model-major batching, and chat/smoke calls  |
-| **md-convert** | 2026-07-25.1 | 9 | 2026-08-04 | Convert a Markdown file to .docx, .html, .pdf, or .xlsx (pandoc-based, with optional generated-datetime stampi |
-| **meeting-canvas** | 2026-07-26.1 | 8 | 2026-08-04 | Generate a fresh interactive meeting worksheet as a self-contained HTML canvas — a draggable/resizable Gantt r |
-| **pub-readiness-check** | 2026-07-26.1 | — | 2026-08-04 | Audit a repo for publication/grant readiness — confirms it has at least a stub of a future paper/manuscript AN |
-| **sage-agent-tempo** | 2026-07-26.1 | 5 | 2026-08-04 | Track what AI agents build, how long it takes, and what it costs |
-| **secret-guard** | 0.1.0 | 43 | 2026-08-04 | Stop API keys, tokens, and passwords from ever reaching git |
+| **agent-coach** | 1.1.0 | 63 | 2026-08-07 | Pair-programming coach for people learning an AI coding agent (Claude Code, Codex, Cursor) |
+| **codex-security-scan** | 0.1.0 | 38 | 2026-08-07 | Run a real security scan on one repo or many, using OpenAI's open-source Codex Security methodology (threat mo |
+| **llm-usage-ledger** | 1.0.0 | 27 | 2026-08-07 | Track EVERY LLM usage stream — cloud API calls, Claude Code/Codex subscription transcripts (ingest), and local |
+| **lmstudio-panel** | 0.9.0 | 19 | 2026-08-07 | Control a local LM Studio server — serve, list/load/unload models, model-major batching, and chat/smoke calls  |
+| **md-convert** | 2026-07-25.1 | 9 | 2026-08-07 | Convert a Markdown file to .docx, .html, .pdf, or .xlsx (pandoc-based, with optional generated-datetime stampi |
+| **meeting-canvas** | 2026-07-26.1 | 8 | 2026-08-07 | Generate a fresh interactive meeting worksheet as a self-contained HTML canvas — a draggable/resizable Gantt r |
+| **pub-readiness-check** | 2026-07-26.1 | — | 2026-08-07 | Audit a repo for publication/grant readiness — confirms it has at least a stub of a future paper/manuscript AN |
+| **sage-agent-tempo** | 2026-07-26.1 | 5 | 2026-08-07 | Track what AI agents build, how long it takes, and what it costs |
+| **secret-guard** | 0.1.0 | 43 | 2026-08-07 | Stop API keys, tokens, and passwords from ever reaching git |
 
 <!-- SKILLS:END -->
